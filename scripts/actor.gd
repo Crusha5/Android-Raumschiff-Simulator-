@@ -23,6 +23,10 @@ var talk := 0.0
 var path: Array = []
 var path_i := 0
 var mats := {}
+var navi: Object = null
+var route := PackedVector3Array()
+var route_i := 0
+var blocked := 0.0
 var height := 0.0
 
 static func vmat(rough := 0.6, metal := 0.0) -> StandardMaterial3D:
@@ -441,25 +445,56 @@ func update(dt: float, player_pos: Vector3) -> void:
 			_update_welder(dt)
 
 func _pick_target() -> void:
-	target = Vector3(randf_range(area.position.x, area.end.x), node.position.y, randf_range(area.position.z, area.end.z))
+	route = PackedVector3Array()
+	route_i = 0
+	if navi:
+		target = navi.nav_random(area, node.position.y)
+		route = navi.nav_path(node.position, target)
+		if route.is_empty():
+			target = node.position
+	else:
+		target = Vector3(randf_range(area.position.x, area.end.x), node.position.y, randf_range(area.position.z, area.end.z))
+
+## Nächster Wegpunkt auf dem Weg zum Ziel
+func _waypoint() -> Vector3:
+	while route_i < route.size() and Vector2(route[route_i].x - node.position.x, route[route_i].z - node.position.z).length() < 0.22 and route_i < route.size() - 1:
+		route_i += 1
+	if route_i < route.size():
+		return route[route_i]
+	return target
 
 func _update_human(dt: float, player_pos: Vector3) -> void:
 	var near := player_pos.distance_to(node.global_position) < 3.2
 	match mode:
 		"walk":
-			var to := target - node.position
+			var to := _waypoint() - node.position
 			to.y = 0.0
-			if to.length() < 0.3 or wait > 0.0:
+			var rest := target - node.position
+			rest.y = 0.0
+			# Kurz warten, wenn der Spieler im Weg steht
+			var pp := player_pos - node.global_position
+			pp.y = 0.0
+			if pp.length() < 1.1 and to.length() > 0.01 and pp.normalized().dot(to.normalized()) > 0.4:
+				blocked += dt
+				if blocked > 2.5:
+					blocked = 0.0
+					_pick_target()
+				_reset_pose()
+				_idle_motion(dt)
+				_look_at_player(player_pos, dt)
+				return
+			blocked = 0.0
+			if rest.length() < 0.3 or wait > 0.0:
 				wait -= dt
 				_reset_pose()
 				_idle_motion(dt)
-				if wait <= 0.0 and to.length() < 0.3:
+				if wait <= 0.0 and rest.length() < 0.3:
 					_pick_target()
 					wait = randf_range(1.5, 5.0)
 				elif wait <= 0.0:
 					wait = 0.0
 			else:
-				node.position += to.normalized() * speed * dt
+				node.position += to.normalized() * minf(speed * dt, to.length() + 0.05)
 				node.rotation.y = lerp_angle(node.rotation.y, atan2(-to.x, -to.z), dt * 5.0)
 				phase += dt * speed * 5.2
 				_walk_pose(phase, 1.0)
@@ -525,9 +560,11 @@ func _update_drone(dt: float) -> void:
 	body.rotation.x = clampf(to.length(), 0.0, 1.0) * 0.18
 
 func _update_cleaner(dt: float) -> void:
-	var to := target - node.position
+	var to := _waypoint() - node.position
 	to.y = 0.0
-	if to.length() < 0.3:
+	var rest := target - node.position
+	rest.y = 0.0
+	if rest.length() < 0.3:
 		wait -= dt
 		if wait <= 0.0:
 			_pick_target()

@@ -188,7 +188,7 @@ func _make_station(d: Dictionary) -> void:
 	var free := kind == "freeport"
 	var hull_c := Color(0.25, 0.24, 0.27) if free else Color(0.66, 0.67, 0.7)
 	var hull := ShipBuilder.hull_mat(hull_c, accent, 0 if free else 1, Vector3(60, 60, 140), 0.12, 0.18, 0.55, 0.8)
-	var dark := ShipBuilder.std(Color(0.26, 0.28, 0.31) if not free else Color(0.12, 0.12, 0.14), 0.35, 0.5)
+	var dark := ShipBuilder.std(Color(0.26, 0.28, 0.31) if not free else Color(0.12, 0.12, 0.14), 0.35, 0.5, 0.8, 0.06)
 	var acc := ShipBuilder.hull_mat(accent, accent, 0, Vector3(60, 60, 60), 0.2, 0.3, 0.5, 0.4)
 	var solar := ShipBuilder.hull_mat(Color(0.08, 0.13, 0.25), Color(0.1, 0.2, 0.4), 0, Vector3(130, 2, 35), 0.25, 0.8, 0.22, 0.3)
 	var gh := Geo.new()
@@ -243,7 +243,9 @@ func _make_station(d: Dictionary) -> void:
 				gn.box(Vector3(4, 4, 4), 0.5, Geo.at(-150, -186, z))
 				gn.box(Vector3(4, 4, 4), 0.5, Geo.at(150, -186, z))
 			gt.box(Vector3(30, 140, 30), 2.0, Geo.at(0, -120, -60))
-			var proto := ShipBuilder.build({"frame": "kondor", "engine": "ionen", "rcs": "rcs4", "weapon": "lanze", "shield": "s3", "cargo": "k120", "armor": "a3", "extra": "x0"},
+			var prng := RandomNumberGenerator.new()
+			prng.seed = 42
+			var proto := ShipBuilder.build(Npc.tiered_bp("kondor", 3, prng),
 				{"hull": "#4a4f58", "accent": "#9fd4ff", "pattern": "uni", "flame": "auto"})
 			proto.scale = Vector3.ONE * 11.0
 			proto.position = Vector3(0, -260, -60)
@@ -389,7 +391,7 @@ func _make_gate(d: Dictionary) -> void:
 	var dest := Universe.system(d.to)
 	var col: Color = dest.neb[1]
 	gm.to_node(g, ShipBuilder.hull_mat(Color(0.5, 0.52, 0.56), col, 0, Vector3(200, 200, 20), 0.08, 0.25, 0.5, 0.8))
-	gd.to_node(g, ShipBuilder.std(Color(0.18, 0.19, 0.22), 0.4, 0.5))
+	gd.to_node(g, ShipBuilder.std(Color(0.18, 0.19, 0.22), 0.4, 0.5, 0.8, 0.06))
 	gl.to_node(g, ShipBuilder.emissive(Color(1, 0.3, 0.25), 5.0), false)
 	var inner_mat := ShipBuilder.emissive(col.lightened(0.4), 4.0)
 	gi.to_node(g, inner_mat, false)
@@ -452,7 +454,7 @@ func _make_lane(ln: Array) -> void:
 			gl.box(Vector3(3, 3, 15), 0.5, xf * Transform3D(Basis(Vector3.BACK, ang), o * 1.12))
 	var node := Node3D.new()
 	content.add_child(node)
-	gm.to_node(node, ShipBuilder.std(Color(0.42, 0.44, 0.48), 0.4, 0.45))
+	gm.to_node(node, ShipBuilder.std(Color(0.42, 0.44, 0.48), 0.4, 0.45, 0.6, 0.12))
 	var lm := ShipBuilder.emissive(Color(1.0, 0.75, 0.35), 3.0)
 	gl.to_node(node, lm, false)
 	lane_mats.append(lm)

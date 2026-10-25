@@ -6,6 +6,11 @@ extends Node3D
 
 const WINDOW_SHADER := preload("res://shaders/window.gdshader")
 const ROOM_SHADER := preload("res://shaders/interior.gdshader")
+const BP_SHADER := preload("res://shaders/blueprint_table.gdshader")
+const TEX_DECK_N := preload("res://textures/deck_n.png")
+const TEX_DECK_M := preload("res://textures/deck_m.png")
+const TEX_WALL_N := preload("res://textures/wall_n.png")
+const TEX_WALL_M := preload("res://textures/wall_m.png")
 
 var env: Environment
 var interactables: Array = []   # {pos, r, label, action, arg}
@@ -18,6 +23,11 @@ var body: StaticBody3D
 var kind := ""
 var rng := RandomNumberGenerator.new()
 var _t := 0.0
+var obstacles: Array = []   # Rect2 im Grundriss (x, z) für die Wegfindung
+var nav: AStarGrid2D
+var nav_org := Vector2.ZERO
+const NAV_CELL := 0.4
+const NAV_PAD := 0.38
 
 func _ready() -> void:
 	env = Environment.new()
@@ -45,6 +55,8 @@ func clear() -> void:
 	doors = []
 	spinners = []
 	spawns = {}
+	obstacles = []
+	nav = null
 	body = StaticBody3D.new()
 	add_child(body)
 
@@ -57,6 +69,100 @@ func collider(size: Vector3, pos: Vector3, rot_y := 0.0) -> void:
 	cs.position = pos
 	cs.rotation.y = rot_y
 	body.add_child(cs)
+	if pos.y - size.y * 0.5 < 1.6 and pos.y + size.y * 0.5 > 0.15:
+		var c := absf(cos(rot_y))
+		var sn := absf(sin(rot_y))
+		var ex := c * size.x * 0.5 + sn * size.z * 0.5
+		var ez := sn * size.x * 0.5 + c * size.z * 0.5
+		obstacles.append(Rect2(pos.x - ex, pos.z - ez, ex * 2.0, ez * 2.0))
+
+# ------------------------------------------------------------------ Wegfindung
+## Rastert alle Hindernisse in ein A*-Gitter, damit Figuren um Tische herumlaufen.
+func build_nav() -> void:
+	var bounds := Rect2()
+	var first := true
+	for a in actors:
+		if a.mode == "walk" or a.kind == "cleaner":
+			var r := Rect2(a.area.position.x, a.area.position.z, a.area.size.x, a.area.size.z).grow(1.0)
+			bounds = r if first else bounds.merge(r)
+			first = false
+	if first:
+		return
+	# Stehende Personen sind ebenfalls Hindernisse (und bekommen eine Kollision)
+	for a in actors:
+		if (a.kind == "human" or a.kind == "servo") and a.mode != "walk":
+			var p: Vector3 = a.node.position
+			obstacles.append(Rect2(p.x - 0.3, p.z - 0.3, 0.6, 0.6))
+			var cs := CollisionShape3D.new()
+			var cy := CylinderShape3D.new()
+			cy.radius = 0.3
+			cy.height = 1.7
+			cs.shape = cy
+			cs.position = p + Vector3(0, 0.85, 0)
+			body.add_child(cs)
+	nav = AStarGrid2D.new()
+	nav_org = bounds.position
+	var w := int(ceil(bounds.size.x / NAV_CELL))
+	var h := int(ceil(bounds.size.y / NAV_CELL))
+	nav.region = Rect2i(0, 0, w, h)
+	nav.cell_size = Vector2(NAV_CELL, NAV_CELL)
+	nav.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
+	nav.default_compute_heuristic = AStarGrid2D.HEURISTIC_OCTILE
+	nav.update()
+	for o in obstacles:
+		var r: Rect2 = (o as Rect2).grow(NAV_PAD)
+		var x0 := maxi(0, int(floor((r.position.x - nav_org.x) / NAV_CELL)))
+		var x1 := mini(w - 1, int(floor((r.end.x - nav_org.x) / NAV_CELL)))
+		var z0 := maxi(0, int(floor((r.position.y - nav_org.y) / NAV_CELL)))
+		var z1 := mini(h - 1, int(floor((r.end.y - nav_org.y) / NAV_CELL)))
+		for x in range(x0, x1 + 1):
+			for z in range(z0, z1 + 1):
+				var cc := nav_org + Vector2(x + 0.5, z + 0.5) * NAV_CELL
+				if r.has_point(cc):
+					nav.set_point_solid(Vector2i(x, z), true)
+	for a in actors:
+		if a.mode == "walk" or a.kind == "cleaner":
+			a.navi = self
+			if not nav_free(a.node.position):
+				a.node.position = nav_random(a.area, a.node.position.y)
+			a.target = a.node.position
+
+func _cell(p: Vector3) -> Vector2i:
+	return Vector2i(int(floor((p.x - nav_org.x) / NAV_CELL)), int(floor((p.z - nav_org.y) / NAV_CELL)))
+
+func nav_free(p: Vector3) -> bool:
+	if nav == null:
+		return true
+	var c := _cell(p)
+	return nav.is_in_boundsv(c) and not nav.is_point_solid(c)
+
+func nav_random(area: AABB, y := 0.0) -> Vector3:
+	for i in 40:
+		var p := Vector3(randf_range(area.position.x, area.end.x), y, randf_range(area.position.z, area.end.z))
+		if nav_free(p):
+			return p
+	return area.get_center() * Vector3(1, 0, 1) + Vector3(0, y, 0)
+
+func nav_path(from: Vector3, to: Vector3) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if nav == null:
+		out.append(to)
+		return out
+	var a := _cell(from)
+	var b := _cell(to)
+	if not nav.is_in_boundsv(a) or not nav.is_in_boundsv(b):
+		return out
+	var ids := nav.get_id_path(a, b, true)
+	# Wegpunkte ausdünnen: nur Richtungswechsel behalten
+	var prev_dir := Vector2i.ZERO
+	for i in range(1, ids.size()):
+		var d: Vector2i = ids[i] - ids[i - 1]
+		if d != prev_dir and i > 1:
+			var q: Vector2i = ids[i - 1]
+			out.append(Vector3(nav_org.x + (q.x + 0.5) * NAV_CELL, from.y, nav_org.y + (q.y + 0.5) * NAV_CELL))
+		prev_dir = d
+	out.append(Vector3(to.x, from.y, to.z))
+	return out
 
 ## Fester Block: sichtbar (in Geo g) und begehbar (Kollision)
 func solid(g: Geo, size: Vector3, pos: Vector3, r := 0.04, collide := true) -> void:
@@ -109,6 +215,12 @@ func room_mat(wall: Color, accent: Color, floor_c := Color(0.2, 0.21, 0.24), cei
 	m.set_shader_parameter("panel", panel)
 	m.set_shader_parameter("band_y", band)
 	m.set_shader_parameter("glow", glow)
+	m.set_shader_parameter("deck_n", TEX_DECK_N)
+	m.set_shader_parameter("deck_m", TEX_DECK_M)
+	m.set_shader_parameter("wall_n", TEX_WALL_N)
+	m.set_shader_parameter("wall_m", TEX_WALL_M)
+	m.set_shader_parameter("ceil_n", ShipBuilder.TEX_HULL_N)
+	m.set_shader_parameter("ceil_m", ShipBuilder.TEX_HULL_M)
 	return m
 
 func window(size: Vector2, xf: Transform3D, sys_id: String, from_pos := Vector3.ZERO) -> void:
@@ -260,6 +372,43 @@ func update(dt: float, player_pos: Vector3) -> void:
 	for s in spinners:
 		s.node.rotate_y(dt * float(s.speed))
 
+## Konstruktionstisch mit leuchtendem Raster und einem kleinen Hologramm des eigenen Schiffs
+func _blueprint_table(p: Vector3, ship_bp: Dictionary, ship_paint: Dictionary, gt: Geo, rot := 0.0) -> void:
+	var b := Basis(Vector3.UP, rot)
+	var w := 2.6
+	var d := 1.5
+	solid(gt, Vector3(w * 0.8, 0.8, d * 0.7), p + Vector3(0, 0.4, 0), 0.08)
+	var top := Geo.new()
+	top.box(Vector3(w, 0.1, d), 0.03, Transform3D(b, p + Vector3(0, 0.86, 0)))
+	top.to_node(self, ShipBuilder.std(Color(0.12, 0.13, 0.16), 0.6, 0.35))
+	var gg := Geo.new()
+	gg.box(Vector3(w - 0.16, 0.02, d - 0.16), 0.0, Transform3D(b, p + Vector3(0, 0.92, 0)))
+	var gm := ShaderMaterial.new()
+	gm.shader = BP_SHADER
+	gg.to_node(self, gm, false)
+	collider(Vector3(w, 1.0, d), p + Vector3(0, 0.5, 0), rot)
+	var holo := ShipBuilder.build(ship_bp, ship_paint)
+	for f in holo.get_meta("flames"):
+		f.visible = false
+	holo.get_meta("eng_light").visible = false
+	var aabb := Hangar._aabb(holo, Transform3D.IDENTITY)
+	var sc := 1.1 / maxf(aabb.size.z, aabb.size.x)
+	var pivot := Node3D.new()
+	pivot.position = p + Vector3(0, 1.35, 0)
+	add_child(pivot)
+	holo.scale = Vector3.ONE * sc
+	holo.position = -aabb.get_center() * sc
+	pivot.add_child(holo)
+	spinners.append({"node": pivot, "speed": 0.5})
+	var l := OmniLight3D.new()
+	l.light_color = Color(0.45, 0.75, 1.0)
+	l.light_energy = 1.2
+	l.omni_range = 4.0
+	l.position = p + Vector3(0, 1.6, 0)
+	add_child(l)
+	neon("BLAUPAUSE", p + Vector3(0, 2.4, 0), rot, Color(0.55, 0.8, 1.0), 40)
+	add_interact(p + Vector3(0, 1.0, 0), 2.6, "Konstruktionstisch · Schiff entwerfen und umbauen", "blueprint")
+
 func _people_cfg(r: RandomNumberGenerator) -> Dictionary:
 	var tops := [Color(0.22, 0.27, 0.35), Color(0.35, 0.18, 0.16), Color(0.2, 0.3, 0.24), Color(0.4, 0.36, 0.3), Color(0.14, 0.14, 0.16), Color(0.5, 0.45, 0.2), Color(0.25, 0.2, 0.35)]
 	var pants := [Color(0.12, 0.13, 0.16), Color(0.25, 0.22, 0.18), Color(0.18, 0.2, 0.25), Color(0.3, 0.3, 0.32)]
@@ -268,7 +417,7 @@ func _people_cfg(r: RandomNumberGenerator) -> Dictionary:
 		"pads": r.randf() < 0.3, "cap": r.randf() < 0.2}
 
 # ------------------------------------------------------------------ Station
-func build_station(st: Dictionary, ship_fit: Dictionary, ship_paint: Dictionary, has_job: bool) -> void:
+func build_station(st: Dictionary, ship_bp: Dictionary, ship_paint: Dictionary, has_job: bool) -> void:
 	clear()
 	kind = "station"
 	rng.seed = hash(st.id)
@@ -481,7 +630,7 @@ func build_station(st: Dictionary, ship_fit: Dictionary, ship_paint: Dictionary,
 	gpad.torus(5.0, 0.04, 48, 4, Transform3D(Basis(Vector3.RIGHT, PI / 2), pad + Vector3(0, 0.09, 0)))
 	gpad.to_node(self, ShipBuilder.emissive(Color(1.0, 0.71, 0.28), 1.3), false)
 	# Das eigene Schiff in Originalgröße
-	var ship := ShipBuilder.build(ship_fit, ship_paint)
+	var ship := ShipBuilder.build(ship_bp, ship_paint)
 	ship.get_meta("load").visible = has_job
 	for f in ship.get_meta("flames"):
 		f.visible = false
@@ -528,6 +677,7 @@ func build_station(st: Dictionary, ship_fit: Dictionary, ship_paint: Dictionary,
 	label3d(r7, "Mechanik-Einheit", "R-7")
 	add_interact(Vector3(-24, 1.0, 13.2), 2.4, "Mechanik-Roboter R-7 · Teile tunen", "tune")
 	neon("WERKSTATT", Vector3(-24, 3.0, 16.75), PI, Color(0.5, 0.9, 0.55), 56)
+	_blueprint_table(Vector3(-31.0, 0, 12.0), ship_bp, ship_paint, gt, PI)
 	neon("HANGAR %d" % (1 + absi(hash(st.id)) % 9), Vector3(-20.25, 8.0, 0), -PI / 2, accent, 140)
 	for x in [-46.0, -37.0, -28.0]:
 		gl.box(Vector3(0.5, 0.06, 26), 0.02, Geo.at(x, 13.96, 0))
@@ -553,20 +703,32 @@ func build_station(st: Dictionary, ship_fit: Dictionary, ship_paint: Dictionary,
 	spawns["ship"] = spawns["dock"]
 	spawns["hall"] = Transform3D(Basis(Vector3.UP, -PI / 2), Vector3(-13.0, 0.1, 0.0))
 	spawn = spawns["dock"]
+	build_nav()
 
 # ------------------------------------------------------------------ Schiffsinneres
-func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: String) -> void:
+func build_ship(bp: Dictionary, paint: Dictionary, job: Dictionary, sys_id: String) -> void:
 	clear()
 	kind = "ship"
 	rng.seed = 7
-	var F := Game.part("frame", fit.frame)
-	var style := int(F.style)
-	var L: float = [10.0, 14.0, 12.0, 18.0][style]
+	var rows := {}
+	var present := {}
+	for m in bp.mods:
+		present[Game.mod(m[0]).cat] = true
+		for c in Game.footprint(m):
+			rows[c.y] = true
+	var cats := []
+	for c in Game.CATS:
+		if present.has(c[0]) and not c[0] in ["hull", "wing", "cockpit"]:
+			cats.append([c[0], c[1]])
+	cats.append(["blueprint", "Blaupause"])
+	var st := Game.bp_stats(bp, Game.s.tune)
+	var L: float = clampf(roundf(maxf(rows.size() * 1.6 + 2.0, cats.size() * 1.25 + 4.0) / 2.0) * 2.0, 8.0, 22.0)
+	var style := clampi(int(float(st.cap) / 30.0), 0, 3)
 	var W := 3.2
 	var H := 2.6
 	var hc := Color.html(paint.hull)
 	var ac := Color.html(paint.accent)
-	var fc := Game.flame_color(paint, fit.engine)
+	var fc := Game.flame_color(paint, Game.main_engine(bp))
 	var gr := Geo.new()
 	var gt := Geo.new()
 	var gl := Geo.new()
@@ -608,8 +770,8 @@ func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: Str
 	gsc.box(Vector3(0.03, 0.25, 0.25), 0.01, Geo.at(-W / 2 + 0.04, 1.3, lz + 0.95))
 	add_interact(Vector3(-W / 2 + 0.6, 1.0, lz), 1.4, "Schleuse · Hangar betreten", "leave")
 	# Konsolen für Bauteile
-	var slots := [["engine", "Triebwerk"], ["rcs", "Düsen"], ["weapon", "Waffen"], ["shield", "Schild"], ["cargo", "Frachtmodul"], ["armor", "Panzerung"], ["extra", "Extra"]]
-	var per_side := 4
+	var slots := cats
+	var per_side := int(ceil(slots.size() / 2.0))
 	var span := L - 4.0
 	for i in slots.size():
 		var side := -1.0 if i < per_side else 1.0
@@ -622,11 +784,21 @@ func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: Str
 		solid(gt, Vector3(0.45, 1.0, 0.9), Vector3(x, 0.5, z), 0.06)
 		gsc.box(Vector3(0.02, 0.32, 0.55), 0.01, Transform3D(Basis(Vector3.FORWARD, side * 0.25), Vector3(x - side * 0.12, 1.3, z)))
 		ga.box(Vector3(0.48, 0.05, 0.92), 0.02, Geo.at(x, 1.01, z))
-		var pid: String = fit[slots[i][0]]
-		var part := Game.part(slots[i][0], pid)
-		var lvl := Game.tune_level(pid)
-		neon("%s\n%s%s" % [String(slots[i][1]).to_upper(), part.n, (" +%d" % lvl) if lvl > 0 else ""], Vector3(x - side * 0.05, 1.95, z), -side * PI / 2, ac.lerp(Color.WHITE, 0.4), 18)
-		add_interact(Vector3(x - side * 0.6, 1.0, z), 1.2, "%s · %s tauschen" % [slots[i][1], part.n], "console", slots[i][0])
+		var ck: String = slots[i][0]
+		if ck == "blueprint":
+			neon("BLAUPAUSE\nKonstruktion", Vector3(x - side * 0.05, 1.95, z), -side * PI / 2, Color(0.55, 0.8, 1.0), 18)
+			add_interact(Vector3(x - side * 0.6, 1.0, z), 1.2, "Konstruktionskonsole · Schiff umbauen", "blueprint")
+			continue
+		var best := ""
+		var n := 0
+		for m in bp.mods:
+			if Game.mod(m[0]).cat == ck:
+				n += 1
+				if best == "" or int(Game.mod(m[0]).price) > int(Game.mod(best).price):
+					best = m[0]
+		var lvl := Game.tune_level(best)
+		neon("%s\n%s%s%s" % [String(slots[i][1]).to_upper(), ("%d× " % n) if n > 1 else "", Game.mod(best).n, (" +%d" % lvl) if lvl > 0 else ""], Vector3(x - side * 0.05, 1.95, z), -side * PI / 2, ac.lerp(Color.WHITE, 0.4), 18)
+		add_interact(Vector3(x - side * 0.6, 1.0, z), 1.2, "%s · Systemstatus" % slots[i][1], "console", ck)
 	# Laderaum
 	room(gr, -hw / 2, hw / 2, z1, z1 + hd, H + 0.6, [{"side": "n", "from": -W / 2, "to": W / 2, "h": H}], 0.2)
 	gl.box(Vector3(hw - 0.4, 0.02, 0.06), 0.01, Geo.at(0, 0.012, z1 + 0.3))
@@ -668,3 +840,4 @@ func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: Str
 	probe(Vector3(0, 1.4, (z0 - cd + z1 + hd) / 2), Vector3(hw, H + 0.8, L + cd + hd))
 	spawn = Transform3D(Basis(Vector3.UP, -PI / 2), Vector3(-W / 2 + 0.9, 0.1, lz))
 	spawns["ship"] = spawn
+	build_nav()

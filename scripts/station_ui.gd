@@ -64,6 +64,7 @@ func _ready() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	v.add_child(scroll)
+	TouchScroll.attach(scroll)
 	content = K.vbox(10)
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(content)
@@ -147,19 +148,18 @@ func _rank_box() -> Control:
 	if not g.is_empty():
 		var miss: int = int(g.p.price) - int(Game.s.credits)
 		var tail := "noch [color=#ece5d3]%s cr[/color]" % Game.fmt(miss) if miss > 0 else "[color=#7fe08a][b]jetzt leistbar[/b][/color]"
-		v.add_child(_rich("Nächstes Upgrade: [color=#9fd4ff][b]%s[/b][/color] · %s" % [g.p.n, tail], 12, K.MUTED))
+		v.add_child(_rich("Nächstes Modul: [color=#9fd4ff][b]%s[/b][/color] (%s) · %s" % [g.p.n, Game.cat_name(g.p.cat), tail], 12, K.MUTED))
 	var best_t := -1
 	var best_s := ""
-	for sl in Game.SLOTS:
-		var id: String = Game.s.fit[sl[0]]
-		if Game.tunable(sl[0], id) and Game.tune_level(id) < Game.TUNE_MAX:
-			var tc := Game.tune_cost(sl[0], id)
+	for id in Game.bp_counts(Game.s.bp):
+		if Game.tunable(id) and Game.tune_level(id) < Game.TUNE_MAX:
+			var tc := Game.tune_cost(id)
 			if best_t < 0 or tc < best_t:
 				best_t = tc
-				best_s = sl[1]
+				best_s = Game.mod(id).n
 	if best_t > 0:
 		var ok := int(Game.s.credits) >= best_t
-		v.add_child(_rich("Tuning: [color=#9fd4ff][b]%s[/b][/color] eine Stufe für %s cr%s" % [best_s, Game.fmt(best_t), " · [color=#7fe08a][b]jetzt leistbar[/b][/color] beim Ausrüster oder Mechanik-Roboter im Hangar" if ok else ""], 12, K.MUTED))
+		v.add_child(_rich("Tuning: [color=#9fd4ff][b]%s[/b][/color] eine Stufe für %s cr%s" % [best_s, Game.fmt(best_t), " · [color=#7fe08a][b]jetzt leistbar[/b][/color] beim Mechanik-Roboter R-7 im Hangar" if ok else ""], 12, K.MUTED))
 	if int(Game.s.streak) > 0:
 		v.add_child(K.wrap("Lieferserie: %d ohne Kratzer · Lohn ×%s" % [int(Game.s.streak), String.num(Game.streak_mult(), 2).replace(".", ",")], 12, K.OK))
 	return card
@@ -246,7 +246,7 @@ func _bar() -> void:
 func _shop() -> void:
 	var st: Dictionary = main.dock_station()
 	var shop_lvl := int(st.shop)
-	_say("Alles, was du hier siehst, kann ich dir sofort einbauen. Ausgebaute Teile lege ich dir ins Lager." if shop_lvl < 3 else "Willkommen in der besten Werft weit und breit. Hier gibt's alles – wenn du's bezahlen kannst.")
+	_say("Module kaufst du bei mir, eingebaut wird am Blaupausen-Tisch im Hangar. Ausgebautes lagere ich für dich ein." if shop_lvl < 3 else "Willkommen in der besten Werft weit und breit. Hier gibt's jedes Modul – wenn du's bezahlen kannst.")
 	var hull_frac: float = main.ship_hull_frac()
 	if hull_frac < 0.999:
 		var r := K.hbox(8)
@@ -255,31 +255,78 @@ func _shop() -> void:
 		r.add_child(K.spacer())
 		r.add_child(K.btn("Reparieren · %s cr" % Game.fmt(cost), func(): main.repair(), true, int(Game.s.credits) < cost))
 		content.add_child(r)
+	var bp_btn := K.btn("Blaupause öffnen – Schiff umbauen", func(): main.open_blueprint(), true)
+	bp_btn.custom_minimum_size = Vector2(0, 42)
+	content.add_child(bp_btn)
 	var chips := HFlowContainer.new()
 	chips.add_theme_constant_override("h_separation", 6)
 	chips.add_theme_constant_override("v_separation", 6)
-	for sl in Game.SLOTS:
-		var id: String = sl[0]
-		var b := K.btn(sl[1], func(): _pick_slot(id), id == slot)
-		b.custom_minimum_size = Vector2(0, 36)
+	if not Game.CATS.any(func(c): return c[0] == slot):
+		slot = "engine"
+	for c in Game.CATS:
+		var id: String = c[0]
+		var b := K.btn(c[1], func(): _pick_slot(id), id == slot)
+		b.custom_minimum_size = Vector2(0, 34)
 		chips.add_child(b)
 	content.add_child(chips)
-	content.add_child(_stats_box(main.S, Game.stats(main.view_fit(), Game.s.tune)))
-	if Game.tunable(slot, Game.s.fit[slot]):
-		content.add_child(_tune_card(slot))
-	_part_list(true, shop_lvl)
-	content.add_child(K.wrap("Tippe ein Teil an, um es am Schiff anzuprobieren.", 12))
+	_module_list(shop_lvl)
 
-func _tune_card(sl: String) -> Control:
-	var id: String = Game.s.fit[sl]
-	var p := Game.part(sl, id)
+func _module_list(shop_lvl: int) -> void:
+	var rk := Game.rank()
+	var ship := Game.bp_counts(Game.s.bp)
+	for id in Game.MODULES:
+		var p: Dictionary = Game.MODULES[id]
+		if p.cat != slot:
+			continue
+		var sold := int(p.tier) <= shop_lvl
+		var c := K.card("CardEq" if ship.has(id) else "Card")
+		if int(p.rank) > rk or not sold:
+			c.modulate = Color(1, 1, 1, 0.55)
+		var v := K.vbox(4)
+		c.add_child(v)
+		var r1 := K.hbox(8)
+		r1.add_child(K.lbl(p.n, 15, K.FG))
+		r1.add_child(K.lbl("%d×%d" % [int(p.sz[0]), int(p.sz[1])], 11, K.MUTED, K.F_MONO))
+		r1.add_child(K.spacer())
+		if int(p.price) == 0:
+			r1.add_child(K.caps("Grundausstattung", K.OK))
+		elif int(p.rank) > rk:
+			r1.add_child(K.caps("Ab " + Game.rank_name(int(p.rank))))
+		elif not sold:
+			r1.add_child(K.caps("Nicht im Angebot"))
+		else:
+			r1.add_child(K.btn("Kaufen · %s cr" % Game.fmt(p.price), func(): main.buy_module(id), true, int(Game.s.credits) < int(p.price)))
+		v.add_child(r1)
+		var meta := BlueprintUI._meta(p) + " · " + String(p.d)
+		var inv := Game.inv_count(id)
+		var tail := []
+		if ship.has(id):
+			tail.append("eingebaut %d" % int(ship[id]))
+		if inv > 0:
+			tail.append("im Lager %d" % inv)
+		if int(p.price) > 0 and not sold:
+			tail.append("erhältlich bei: " + main.where_sold(int(p.tier)))
+		if not tail.is_empty():
+			meta += " · " + " · ".join(tail)
+		var r2 := K.hbox(8)
+		r2.add_child(K.wrap(meta, 12))
+		if inv > 0 and int(p.price) > 0:
+			r2.add_child(K.btn("Verkaufen +%s" % Game.fmt(roundi(float(p.price) * 0.5)), func(): main.sell_module(id)))
+		v.add_child(r2)
+		content.add_child(c)
+
+func _tune_card(id: String) -> Control:
+	var p := Game.mod(id)
 	var lvl := Game.tune_level(id)
 	var c := K.card("CardGoal")
 	var v := K.vbox(6)
 	c.add_child(v)
 	var r := K.hbox(8)
-	r.add_child(K.caps("Tuning"))
+	r.add_child(K.caps(Game.cat_name(p.cat)))
 	r.add_child(K.lbl(p.n, 14, K.FG))
+	var n := int(Game.bp_counts(Game.s.bp).get(id, 0))
+	if n > 1:
+		r.add_child(K.lbl("×%d" % n, 12, K.MUTED, K.F_MONO))
 	r.add_child(K.spacer())
 	var pips := ""
 	for i in Game.TUNE_MAX:
@@ -287,115 +334,48 @@ func _tune_card(sl: String) -> Control:
 	r.add_child(K.lbl(pips, 14, K.AMBER, K.F_MONO))
 	v.add_child(r)
 	var r2 := K.hbox(8)
-	r2.add_child(K.wrap("Je Stufe %s · Stufe %d/%d" % [Game.TUNE_TEXT[sl], lvl, Game.TUNE_MAX], 12))
+	r2.add_child(K.wrap("Je Stufe %s · gilt für alle Module dieses Typs · Stufe %d/%d" % [Game.TUNE_TEXT[p.cat], lvl, Game.TUNE_MAX], 12))
 	if lvl < Game.TUNE_MAX:
-		var cost := Game.tune_cost(sl, id)
-		r2.add_child(K.btn("Tunen · %s cr" % Game.fmt(cost), func(): main.tune(sl), true, int(Game.s.credits) < cost))
+		var cost := Game.tune_cost(id)
+		r2.add_child(K.btn("Tunen · %s cr" % Game.fmt(cost), func(): main.tune(id), true, int(Game.s.credits) < cost))
 	else:
 		r2.add_child(K.caps("Maximal getunt", K.OK))
 	v.add_child(r2)
 	return c
 
 func _tune_all() -> void:
-	_say("Piep. Ich bin R-7, Mechanik-Einheit. Ich hole aus deinen Teilen mehr raus. Jede Stufe hält für immer, auch wenn du das Teil ausbaust.")
-	for sl in Game.SLOTS:
-		if Game.tunable(sl[0], Game.s.fit[sl[0]]):
-			content.add_child(K.caps(sl[1]))
-			content.add_child(_tune_card(sl[0]))
+	_say("Piep. Ich bin R-7, Mechanik-Einheit. Ich hole aus deinen Modulen mehr raus. Jede Stufe gilt für alle Module des Typs und hält für immer.")
+	var ids := Game.bp_counts(Game.s.bp).keys()
+	ids.sort_custom(func(a, b): return Game.CATS.map(func(c): return c[0]).find(Game.mod(a).cat) < Game.CATS.map(func(c): return c[0]).find(Game.mod(b).cat))
+	for id in ids:
+		if Game.tunable(id):
+			content.add_child(_tune_card(id))
 	content.add_child(_stats_box(main.S, main.S))
 
 func _console() -> void:
-	_say("Bordrechner: Modul %s. Hier tauschst du Teile aus deinem Lager. Neue Teile gibt es beim Ausrüster." % _slot_name(slot))
-	content.add_child(_stats_box(main.S, Game.stats(main.view_fit(), Game.s.tune)))
-	_part_list(false, -1)
-
-func _slot_name(s: String) -> String:
-	for sl in Game.SLOTS:
-		if sl[0] == s:
-			return sl[1]
-	return s
-
-func _part_list(shop: bool, shop_lvl: int) -> void:
-	var rk := Game.rank()
-	var fit: Dictionary = Game.s.fit
-	var vf: Dictionary = main.view_fit()
-	for id in Game.PARTS[slot]:
-		var p: Dictionary = Game.PARTS[slot][id]
-		var own: bool = Game.s.owned[slot].has(id)
-		if not shop and not own:
-			continue
-		var sold := int(p.tier) <= shop_lvl
-		var eq: bool = fit[slot] == id
-		var sel: bool = vf[slot] == id and not eq
-		var fits := not (slot == "cargo" and int(p.size) > int(Game.part("frame", fit.frame).max_mod))
-		var too_small: bool = slot == "cargo" and not main.job.is_empty() and main.job.get("type", "") == "cargo" and int(p.cap) < int(main.job.mass)
-		var c := K.card("CardEq" if eq else ("CardSel" if sel else "Card"))
-		if int(p.rank) > rk or (shop and not own and not sold):
-			c.modulate = Color(1, 1, 1, 0.55)
-		var v := K.vbox(4)
-		c.add_child(v)
-		var r1 := K.hbox(8)
-		r1.add_child(K.lbl(p.n, 15, K.FG))
-		if own and not eq:
-			r1.add_child(K.lbl("im Lager", 11, K.MUTED, K.F_REG))
-		r1.add_child(K.spacer())
-		if eq:
-			r1.add_child(K.caps("Eingebaut", K.OK))
-		elif not fits:
-			r1.add_child(K.caps("Rumpf zu klein"))
-		elif too_small:
-			r1.add_child(K.caps("Ladung passt nicht"))
-		elif own:
-			r1.add_child(K.btn("Einbauen", func(): main.equip(slot, id), true))
-		elif int(p.rank) > rk:
-			r1.add_child(K.caps("Ab " + Game.rank_name(int(p.rank))))
-		elif not sold:
-			r1.add_child(K.caps("Nicht im Angebot"))
-		else:
-			r1.add_child(K.btn("Kaufen · %s cr" % Game.fmt(p.price), func(): main.buy(slot, id), true, int(Game.s.credits) < int(p.price)))
-		v.add_child(r1)
-		var meta := _part_meta(slot, p)
-		if p.d != "" and slot != "extra":
-			meta += " · " + p.d
-		if shop and not own and not sold:
-			meta += " · erhältlich bei: " + main.where_sold(int(p.tier))
-		v.add_child(K.wrap(meta, 12))
-		var pid: String = id
-		c.gui_input.connect(func(ev: InputEvent): _card_tap(ev, pid))
-		content.add_child(c)
-
-var _tap_start := Vector2.ZERO
-func _card_tap(ev: InputEvent, id: String) -> void:
-	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
-		if ev.pressed:
-			_tap_start = ev.global_position
-		elif ev.global_position.distance_to(_tap_start) < 14.0:
-			main.try_part(slot, id)
+	var counts := Game.bp_counts(Game.s.bp)
+	var lines := []
+	for id in counts:
+		if Game.mod(id).cat == slot:
+			lines.append("%d× %s" % [int(counts[id]), Game.mod(id).n])
+	_say("Bordrechner: %s – %s. Umbauen kannst du am Konstruktionstisch." % [Game.cat_name(slot), ", ".join(lines) if not lines.is_empty() else "nicht verbaut"])
+	var b := K.btn("Blaupause öffnen", func(): main.open_blueprint(), true)
+	b.custom_minimum_size = Vector2(0, 42)
+	content.add_child(b)
+	content.add_child(_stats_box(main.S, main.S))
+	for id in counts:
+		if Game.mod(id).cat == slot:
+			var c := K.card()
+			var v := K.vbox(2)
+			c.add_child(v)
+			var lvl := Game.tune_level(id)
+			v.add_child(K.lbl("%d× %s%s" % [int(counts[id]), Game.mod(id).n, (" · Tuning +%d" % lvl) if lvl > 0 else ""], 14, K.FG))
+			v.add_child(K.wrap(BlueprintUI._meta(Game.mod(id)), 12))
+			content.add_child(c)
 
 func _pick_slot(id: String) -> void:
 	slot = id
-	main.clear_previews()
 	refresh()
-
-func _part_meta(k: String, p: Dictionary) -> String:
-	match k:
-		"frame":
-			return "%d HP · %s t · Module bis %s" % [int(p.hp), str(p.mass), ["", "S", "M", "L"][int(p.max_mod)]]
-		"engine":
-			return "%s kN · %d m/s · %s t" % [Game.fmt(p.thrust), int(p.vmax), str(p.mass)]
-		"rcs":
-			return "Wendigkeit ×%s" % str(p.turn).replace(".", ",")
-		"weapon":
-			return "%d dps · %s m Reichweite · %s Energie/Schuss" % [roundi(float(p.dmg) * float(p.rate) * 2.0), Game.fmt(p.range), str(p.energy)]
-		"shield":
-			return "%d Kapazität · %d/s Aufladung" % [int(p.cap), int(p.regen)]
-		"cargo":
-			return "%d t · Größe %s · %s t" % [int(p.cap), ["", "S", "M", "L"][int(p.size)], str(p.mass)]
-		"armor":
-			if int(p.hp) > 0:
-				return "+%d HP · −%d %% Schaden · %s t" % [int(p.hp), roundi((1.0 - float(p.dmg)) * 100.0), str(p.mass)]
-			return "Kein Zusatzgewicht"
-	return p.d
 
 static func stat_value(st: Dictionary, key: String) -> float:
 	match key:
@@ -456,7 +436,9 @@ func _paint() -> void:
 			sw.tooltip_text = col[0] + (" – ab " + Game.rank_name(int(col[2])) if locked else "")
 			var k0: String = key[0]
 			var v0: String = col[1]
-			sw.pressed.connect(func(): main.set_paint(k0, v0))
+			sw.pressed.connect(func():
+				if TouchScroll.tap_ok():
+					main.set_paint(k0, v0))
 			fl.add_child(sw)
 		content.add_child(fl)
 	content.add_child(K.caps("Muster"))

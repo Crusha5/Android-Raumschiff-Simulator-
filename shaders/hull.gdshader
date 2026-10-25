@@ -1,6 +1,7 @@
 shader_type spatial;
-// Rumpf-Lack mit Paneelfugen, Nieten, leichter Abnutzung und Lackmustern im Objektraum.
+// Rumpf-Lack mit echten Detailtexturen (Platten, Fugen, Nieten, Luken), Abnutzung und Lackmustern im Objektraum.
 #include "res://shaders/common.gdshaderinc"
+#include "res://shaders/detail.gdshaderinc"
 
 uniform vec3 hull_color : source_color = vec3(0.79, 0.76, 0.70);
 uniform vec3 accent_color : source_color = vec3(1.0, 0.71, 0.28);
@@ -10,6 +11,11 @@ uniform float panel_scale = 1.1;
 uniform float metal = 0.4;
 uniform float rough = 0.48;
 uniform float wear = 1.0;
+uniform float det_strength = 1.0;
+uniform float micro = 1.0;
+uniform sampler2D det_n : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D det_m : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D mic_n : filter_linear_mipmap_anisotropic, repeat_enable;
 
 varying vec3 opos;
 varying vec3 onrm;
@@ -19,28 +25,25 @@ void vertex() {
 	onrm = NORMAL;
 }
 
-float grid(vec2 uv, float w) {
-	vec2 g = abs(fract(uv) - 0.5);
-	vec2 fw = fwidth(uv) * 1.2 + 1e-4;
-	vec2 e = smoothstep(vec2(0.5) - w - fw, vec2(0.5) - w, g);
-	return max(e.x, e.y);
-}
-
 void fragment() {
 	vec3 an = abs(onrm);
-	vec2 uv;
-	if (an.x > an.y && an.x > an.z) uv = opos.zy;
-	else if (an.y > an.z) uv = opos.xz;
-	else uv = opos.xy;
-	uv *= panel_scale;
-	uv.x += floor(uv.y) * 0.37; // versetzte Paneele
-	float seam = grid(uv * vec2(0.5, 1.0), 0.008);
-	vec2 rv = fract(uv * vec2(0.5, 1.0) * vec2(4.0, 1.0)) - 0.5;
-	float rivet = (1.0 - smoothstep(0.04, 0.07, length(vec2(rv.x * 0.5, rv.y - 0.42)))) * 0.6;
+	vec3 T;
+	vec3 B;
+	vec2 uv = det_uv(opos, onrm, T, B) * panel_scale * 0.36;
+	uv.x += floor(uv.y) * 0.37;
+	vec4 mk = texture(det_m, uv);
+	float sf = 0.0;
+	if (pattern == 6) sf = 1.0;
+	vec3 pn = det_normal(det_n, uv, normalize(onrm), T, B, det_strength * (1.0 - sf * 0.7));
+	if (micro > 0.0) {
+		vec3 m2 = texture(mic_n, uv * 5.0).rgb * 2.0 - 1.0;
+		pn = normalize(pn + (T * m2.x - B * m2.y) * 0.35 * micro);
+	}
 
 	vec3 q = opos / half_ext;
 	float m = 0.0;
 	vec3 col2 = accent_color;
+	float seam = 1.0 - mk.r;
 	if (pattern == 1) {
 		m = step(abs(q.y - 0.05), 0.22) * step(0.5, an.x + an.z * 0.8) * step(q.z, 0.85);
 	} else if (pattern == 2) {
@@ -61,13 +64,21 @@ void fragment() {
 		col2 = mix(accent_color, hull_color * 0.55, step(0.5, n));
 	} else if (pattern == 6) {
 		float rib = smoothstep(0.35, 0.5, abs(fract(opos.z * 1.6) - 0.5));
-		seam = max(seam * 0.3, rib * 0.6);
+		pn = normalize(pn + vec3(0.0, 0.0, 1.0) * (rib - 0.5) * 0.3 * an.x);
+		seam = max(seam * 0.3, rib * 0.5);
 	}
 	vec3 base = mix(hull_color, col2, m);
-	float dirt = fbm4(opos * 0.7) ;
-	base *= mix(1.0, 0.82 + dirt * 0.3, wear);
-	base *= 1.0 - seam * 0.38 - rivet * 0.12;
+	float dirt = fbm4(opos * 0.7);
+	base *= 1.0 + (mk.a - 0.5) * 0.45;
+	base *= mix(1.0, 0.8 + dirt * 0.32, wear);
+	// Schmutz sammelt sich in Fugen, Kanten sind abgerieben
+	base *= mix(1.0, mk.r, 0.55);
+	float chip = mk.b * wear * smoothstep(0.45, 0.75, dirt + mk.a * 0.3);
+	base = mix(base, vec3(0.55, 0.56, 0.58), chip * 0.55);
 	ALBEDO = base;
-	METALLIC = metal;
-	ROUGHNESS = clamp(rough + seam * 0.25 + (dirt - 0.5) * 0.2 * wear, 0.05, 1.0);
+	METALLIC = mix(metal, 0.85, chip);
+	ROUGHNESS = clamp(rough + (mk.g - 0.5) * 0.7 + (dirt - 0.5) * 0.2 * wear - chip * 0.2, 0.05, 1.0);
+	AO = mk.r;
+	AO_LIGHT_AFFECT = 0.35;
+	NORMAL = normalize((VIEW_MATRIX * (MODEL_MATRIX * vec4(pn, 0.0))).xyz);
 }

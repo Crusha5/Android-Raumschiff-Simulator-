@@ -13,23 +13,39 @@ var throttle := 0.6
 var job_tag := ""   # z. B. "bounty" oder "loot"
 var rng := RandomNumberGenerator.new()
 
-static func pirate_fit(tier: int, r: RandomNumberGenerator) -> Dictionary:
-	var pick := func(slot: String, t: int) -> String:
-		var cands := []
-		for id in Game.PARTS[slot]:
-			if int(Game.PARTS[slot][id].tier) == clampi(t, 0, 3):
-				cands.append(id)
-		if cands.is_empty():
-			return Game.BASE_FIT[slot]
-		return cands[r.randi() % cands.size()]
-	var frames := ["spatz", "pfeil"] if tier < 3 else ["pfeil", "esel", "kondor"]
-	return {
-		"frame": frames[r.randi() % frames.size()] if tier > 0 else "spatz",
-		"engine": pick.call("engine", tier), "rcs": pick.call("rcs", tier),
-		"weapon": pick.call("weapon", clampi(tier + r.randi_range(-1, 0), 0, 3)),
-		"shield": pick.call("shield", tier), "cargo": "k12",
-		"armor": pick.call("armor", clampi(tier - 1, 0, 3)), "extra": "x0",
-	}
+## Blaupause eines Piratenschiffs: Vorlage nach Stufe, Module passend aufgewertet
+static func pirate_bp(tier: int, r: RandomNumberGenerator) -> Dictionary:
+	var pool := ["spatz", "hornisse"] if tier < 2 else (["hornisse", "pfeil"] if tier < 3 else ["pfeil", "hornisse", "kondor"])
+	return tiered_bp(pool[r.randi() % pool.size()], tier, r)
+
+static func trader_bp(r: RandomNumberGenerator) -> Dictionary:
+	return tiered_bp(["esel", "esel", "kondor", "spatz"][r.randi() % 4], 1, r)
+
+## Ersetzt jedes Modul durch eines derselben Kategorie und Größe mit passender Stufe
+static func tiered_bp(tpl: String, tier: int, r: RandomNumberGenerator) -> Dictionary:
+	for t in range(tier, -1, -1):
+		var bp := _tiered_once(tpl, t, r)
+		if Game.validate(bp).ok:
+			return bp
+	return Game.template_bp(tpl)
+
+static func _tiered_once(tpl: String, tier: int, r: RandomNumberGenerator) -> Dictionary:
+	var bp := Game.template_bp(tpl)
+	var pick := {}
+	for m in bp.mods:
+		var d: Dictionary = Game.mod(m[0])
+		if d.cat in ["cockpit", "hull", "cargo", "util", "wing"]:
+			continue
+		var key: String = "%s/%d/%d" % [d.cat, int(d.sz[0]), int(d.sz[1])]
+		if not pick.has(key):
+			var cands := []
+			for id in Game.MODULES:
+				var e: Dictionary = Game.MODULES[id]
+				if e.cat == d.cat and int(e.sz[0]) == int(d.sz[0]) and int(e.sz[1]) == int(d.sz[1]) and absi(int(e.tier) - tier) <= (0 if d.cat == "power" else 1) and int(e.tier) <= tier:
+					cands.append(id)
+			pick[key] = cands[r.randi() % cands.size()] if not cands.is_empty() else m[0]
+		m[0] = pick[key]
+	return bp
 
 static func pirate_paint(r: RandomNumberGenerator) -> Dictionary:
 	var hulls := ["#1c1e22", "#4a4f58", "#5c6448", "#7a1030"]
@@ -114,10 +130,4 @@ func update_ai(dt: float, player: ShipState, world: SpaceWorld, combat) -> void:
 	throttle = clampf(speed_target / vmax, 0.0, 1.0)
 
 func _fire(combat, aim: Vector3) -> void:
-	if fire_cd > 0.0 or energy < float(weapon.energy):
-		return
-	fire_cd = 1.0 / (float(weapon.rate) * 0.55)
-	energy -= float(weapon.energy)
-	var spread := Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), rng.randf_range(-1, 1)) * aim_err
-	for m in muzzles():
-		combat.spawn_bolt(self, m, (aim + spread).normalized(), weapon)
+	fire_groups(combat, func(_w): return aim, 0.55, aim_err, rng)

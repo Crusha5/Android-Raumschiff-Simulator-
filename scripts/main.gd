@@ -16,6 +16,7 @@ var ui_root: Control
 var hud: Hud
 var walk_hud: WalkHud
 var station_ui: StationUI
+var bp_ui: BlueprintUI
 var menu_layer: Control
 var menu_box: VBoxContainer
 var intro_layer: Control
@@ -34,7 +35,7 @@ var offers: Array = []
 var bounties: Array = []
 var last_result: Dictionary = {}
 var nav: Dictionary = {}
-var preview_fit: Dictionary = {}
+var preview_bp: Dictionary = {}
 var pend_paint: Dictionary = {}
 var cam_mode := "cockpit"
 var hit_cd := 0.0
@@ -103,6 +104,9 @@ func _ready() -> void:
 	station_ui.main = self
 	ui_root.add_child(station_ui)
 	station_ui.visible = false
+	bp_ui = BlueprintUI.new()
+	bp_ui.main = self
+	ui_root.add_child(bp_ui)
 	_build_menu()
 	_build_modal()
 	_build_intro()
@@ -118,7 +122,7 @@ func _ready() -> void:
 	player = ShipState.new()
 	player.is_player = true
 	player.faction = "player"
-	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
+	player.setup(Game.s.bp, Game.s.paint, world, Game.s.tune)
 	player.hp = float(player.S.hp_max) * float(Game.s.hull) / 100.0
 	S = player.S
 	combat.ships = [player]
@@ -183,6 +187,7 @@ func _build_menu() -> void:
 	menu_layer.add_child(sc)
 	sc.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	TouchScroll.attach(sc)
 	var cc := CenterContainer.new()
 	cc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cc.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -264,8 +269,8 @@ func where_sold(tier: int) -> String:
 			names.append(st.n)
 	return ", ".join(names)
 
-func view_fit() -> Dictionary:
-	return preview_fit if not preview_fit.is_empty() else Game.s.fit
+func view_bp() -> Dictionary:
+	return preview_bp if not preview_bp.is_empty() else Game.s.bp
 
 func view_paint() -> Dictionary:
 	return pend_paint if not pend_paint.is_empty() else Game.s.paint
@@ -350,20 +355,19 @@ func make_offers() -> void:
 			"zone_name": "Asteroidenfeld" if p.distance_to(sys.fields[0].c) < float(sys.fields[0].r) else "Tiefraum", "pos": _arr(p),
 			"count": cnt, "tier": tier, "pay": 1500 + tier * 1800 + cnt * 600, "rank": maxi(0, tier - 1)})
 
+## Günstigstes noch nicht besessenes Modul, das man mit dem Rang einbauen darf
 func next_goal() -> Dictionary:
 	var rk := Game.rank()
+	var have := Game.bp_counts(Game.s.bp)
 	var best := {}
-	for slot in Game.SLOTS:
-		var k: String = slot[0]
-		var cur_price := int(Game.part(k, Game.s.fit[k]).price)
-		for id in Game.PARTS[k]:
-			var p: Dictionary = Game.PARTS[k][id]
-			if Game.s.owned[k].has(id) or int(p.rank) > rk or int(p.price) <= cur_price:
-				continue
-			if k == "cargo" and int(p.size) > int(Game.part("frame", Game.s.fit.frame).max_mod):
-				continue
-			if best.is_empty() or int(p.price) < int(best.p.price):
-				best = {"k": k, "id": id, "p": p}
+	for id in Game.MODULES:
+		var p: Dictionary = Game.MODULES[id]
+		if int(p.price) <= 0 or int(p.rank) > rk or have.has(id) or Game.inv_count(id) > 0:
+			continue
+		if p.cat in ["hull", "wing"]:
+			continue
+		if best.is_empty() or int(p.price) < int(best.p.price):
+			best = {"id": id, "p": p}
 	return best
 
 func take_offer(o: Dictionary) -> void:
@@ -410,33 +414,22 @@ func repair() -> void:
 
 # ------------------------------------------------------------------ Werft & Lack
 func clear_previews() -> void:
-	if not preview_fit.is_empty() or not pend_paint.is_empty():
-		preview_fit = {}
+	if not preview_bp.is_empty() or not pend_paint.is_empty():
+		preview_bp = {}
 		pend_paint = {}
 		_rebuild_hangar_ship()
 
 func _rebuild_hangar_ship() -> void:
 	if not panel_hangar:
 		return
-	var s := ShipBuilder.build(view_fit(), view_paint())
+	var s := ShipBuilder.build(view_bp(), view_paint())
 	s.get_meta("load").visible = not job.is_empty() and job.get("type", "cargo") == "cargo"
 	hangar.set_ship(s)
 
-func try_part(slot: String, id: String) -> void:
-	var f: Dictionary = Game.s.fit.duplicate()
-	f[slot] = id
-	f = Game.fix_cargo(f)
-	f[slot] = id
-	preview_fit = {} if f == Game.s.fit else f
-	_rebuild_hangar_ship()
-	station_ui.refresh()
-
-func equip(slot: String, id: String) -> void:
+## Übernimmt die neuen Schiffswerte (Hüllenzustand bleibt anteilig erhalten)
+func _refit() -> void:
 	var frac := player.hull_frac()
-	Game.s.fit[slot] = id
-	Game.fix_cargo(Game.s.fit)
-	preview_fit = {}
-	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
+	player.setup(Game.s.bp, Game.s.paint, world, Game.s.tune)
 	player.hp = float(player.S.hp_max) * frac
 	S = player.S
 	_set_load()
@@ -444,30 +437,60 @@ func equip(slot: String, id: String) -> void:
 	_rebuild_hangar_ship()
 	if job.is_empty():
 		make_offers()
-	station_ui.refresh()
 
-func buy(slot: String, id: String) -> void:
-	var p := Game.part(slot, id)
-	if int(Game.s.credits) < int(p.price):
+func shop_tier() -> int:
+	return int(dock_station().shop)
+
+func buy_module(id: String) -> void:
+	var p := Game.mod(id)
+	if int(Game.s.credits) < int(p.price) or int(p.rank) > Game.rank() or int(p.tier) > shop_tier():
 		return
 	Game.s.credits = int(Game.s.credits) - int(p.price)
-	Game.s.owned[slot].append(id)
-	equip(slot, id)
+	Game.inv_add(id, 1)
+	Game.save_game()
+	station_ui.refresh()
 
-func tune(slot: String) -> void:
-	var id: String = Game.s.fit[slot]
-	var cost := Game.tune_cost(slot, id)
+func sell_module(id: String) -> void:
+	if Game.inv_count(id) <= 0:
+		return
+	Game.inv_add(id, -1)
+	Game.s.credits = int(Game.s.credits) + roundi(float(Game.mod(id).price) * 0.5)
+	Game.save_game()
+	station_ui.refresh()
+
+## Grund, warum eine Blaupause hier nicht gebaut werden kann ("" = geht)
+func build_block(bp: Dictionary, plan: Dictionary) -> String:
+	var v := Game.validate(bp)
+	if not v.ok:
+		return v.errors[0] if not v.errors.is_empty() else "Blaupause ungültig"
+	if not plan.locks.is_empty():
+		return plan.locks[0]
+	if state == "flying" or loc != "station" and loc != "ship":
+		return "Nur angedockt möglich"
+	var st := Game.bp_stats(bp, Game.s.tune)
+	if not job.is_empty() and job.get("type", "") == "cargo" and int(st.cap) < int(job.mass):
+		return "Die Ladung (%d t) passt nicht hinein" % int(job.mass)
+	if int(Game.s.credits) < int(plan.total):
+		return "Zu wenig Geld"
+	if int(plan.changed) == 0 and Game.bp_counts(bp) == Game.bp_counts(Game.s.bp):
+		return "Keine Änderung"
+	return ""
+
+func build_blueprint(bp: Dictionary) -> bool:
+	var plan := Game.build_plan(bp, shop_tier())
+	if build_block(bp, plan) != "":
+		return false
+	Game.apply_build(bp, plan)
+	_refit()
+	return true
+
+func tune(id: String) -> void:
+	var cost := Game.tune_cost(id)
 	if int(Game.s.credits) < cost or Game.tune_level(id) >= Game.TUNE_MAX:
 		return
 	Game.s.credits = int(Game.s.credits) - cost
 	Game.s.tune[id] = Game.tune_level(id) + 1
-	var frac := player.hull_frac()
-	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
-	player.hp = float(player.S.hp_max) * frac
-	S = player.S
-	_set_load()
-	Game.save_game()
-	_rebuild_hangar_ship()
+	_refit()
 	station_ui.refresh()
 
 func set_paint(key: String, val: String) -> void:
@@ -497,12 +520,7 @@ func apply_paint() -> void:
 		Game.s.patterns.append(pend_paint.pattern)
 	Game.s.paint = pend_paint
 	pend_paint = {}
-	var frac := player.hull_frac()
-	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
-	player.hp = float(player.S.hp_max) * frac
-	_set_load()
-	Game.save_game()
-	_rebuild_hangar_ship()
+	_refit()
 	station_ui.refresh()
 
 func reset_paint() -> void:
@@ -542,7 +560,7 @@ func enter_station(show_result := true, at := "dock") -> void:
 	state = "walk"
 	loc = "station"
 	var st := dock_station()
-	interior.build_station(st, Game.s.fit, Game.s.paint, not job.is_empty() and job.get("type", "") == "cargo")
+	interior.build_station(st, Game.s.bp, Game.s.paint, not job.is_empty() and job.get("type", "") == "cargo")
 	walker.place(interior.spawns.get(at, interior.spawn))
 	_show_view("interior")
 	walk_hud.loc_lbl.text = st.n
@@ -555,11 +573,11 @@ func enter_station(show_result := true, at := "dock") -> void:
 func enter_ship() -> void:
 	state = "walk"
 	loc = "ship"
-	interior.build_ship(Game.s.fit, Game.s.paint, job, Game.s.system)
+	interior.build_ship(Game.s.bp, Game.s.paint, job, Game.s.system)
 	walker.place(interior.spawn)
 	_show_view("interior")
 	walk_hud.loc_lbl.text = "«%s»" % Game.s.name
-	walk_hud.sub_lbl.text = "AN BORD · " + String(Game.part("frame", Game.s.fit.frame).n).to_upper()
+	walk_hud.sub_lbl.text = "AN BORD · %d MODULE" % Game.s.bp.mods.size()
 	walk_hud.undock_btn.visible = false
 	_update_walk_top()
 
@@ -591,18 +609,23 @@ func _walk_interact() -> void:
 			open_panel("paint", "Ida Farn · Lackiererin", dock_station().n, true)
 		"console":
 			station_ui.slot = arg
-			open_panel("console", "Konsole · " + station_ui._slot_name(arg), "«%s»" % Game.s.name, true, arg)
+			open_panel("console", "Konsole · " + Game.cat_name(arg), "«%s»" % Game.s.name, true, arg)
+		"blueprint":
+			open_blueprint()
+		"store":
+			open_panel("store", "Modullager", dock_station().n, false)
 
 func _info_text() -> String:
 	var t := "[b]Willkommen auf %s.[/b]\n\n" % dock_station().n
 	t += "• [color=#9fd4ff]Aufträge[/color] gibt es bei Mara am Kiosk in der Mitte, Kopfgelder an der Bar.\n"
-	t += "• [color=#ffb547]Neue Teile und Tuning[/color] beim Ausrüster. Tuning auch bei R-7 in der Hangar-Werkstatt.\n"
+	t += "• [color=#ffb547]Schiffsbau:[/color] Am Blaupausen-Tisch im Hangar entwirfst du dein Schiff Modul für Modul und lässt es bauen.\n"
+	t += "• [color=#ffb547]Module kaufen und verkaufen[/color] beim Ausrüster, Tuning bei R-7 in der Hangar-Werkstatt.\n"
 	t += "• Dein Schiff steht im [b]Hangar[/b] hinter der Tür. Geh an die Seite deines Schiffs und steig ein.\n"
-	t += "• An Bord tauschst du an den Konsolen Teile aus deinem Lager. Vom Pilotensitz dockst du ab.\n"
+	t += "• An Bord zeigen die Konsolen deine Module, am Konstruktionstisch planst du Umbauten. Vom Pilotensitz dockst du ab.\n"
 	t += "• Handelsrouten-Ringe und Sprungtore beschleunigen Reisen. Neben den Routen lauern Piraten.\n"
 	var g := next_goal()
 	if not g.is_empty():
-		t += "\nTipp: Als nächstes Teil lohnt sich [b]%s[/b] für %s cr." % [g.p.n, Game.fmt(g.p.price)]
+		t += "\nTipp: Als nächstes Modul lohnt sich [b]%s[/b] (%s) für %s cr." % [g.p.n, Game.cat_name(g.p.cat), Game.fmt(g.p.price)]
 	return t
 
 func _transition(cb: Callable) -> void:
@@ -615,8 +638,9 @@ func _transition(cb: Callable) -> void:
 func open_panel(mode: String, title: String, sub: String, with_hangar: bool, slot := "") -> void:
 	state = "panel"
 	panel_hangar = with_hangar
-	preview_fit = {}
+	preview_bp = {}
 	pend_paint = {}
+	bp_ui.visible = false
 	if with_hangar:
 		hangar.panel_frac = StationUI.PANEL_FRAC
 		_rebuild_hangar_ship()
@@ -626,23 +650,36 @@ func open_panel(mode: String, title: String, sub: String, with_hangar: bool, slo
 	walk_hud.set_prompt("", "")
 	station_ui.open(mode, title, sub, slot)
 
+func open_blueprint() -> void:
+	state = "panel"
+	panel_hangar = true
+	preview_bp = {}
+	pend_paint = {}
+	station_ui.visible = false
+	hangar.panel_frac = BlueprintUI.SIDE_FRAC
+	_rebuild_hangar_ship()
+	_show_view("hangar")
+	walk_hud.set_prompt("", "")
+	bp_ui.open()
+
 func close_panel() -> void:
 	station_ui.visible = false
-	preview_fit = {}
+	bp_ui.visible = false
+	preview_bp = {}
 	pend_paint = {}
 	state = "walk"
 	if loc == "ship" and panel_hangar:
 		var xf := walker.global_transform
 		var yaw := walker.yaw
 		var pitch := walker.pitch
-		interior.build_ship(Game.s.fit, Game.s.paint, job, Game.s.system)
+		interior.build_ship(Game.s.bp, Game.s.paint, job, Game.s.system)
 		walker.global_transform = xf
 		walker.yaw = yaw
 		walker.pitch = pitch
 	elif loc == "station" and panel_hangar:
 		var xf2 := walker.global_transform
 		var yaw2 := walker.yaw
-		interior.build_station(dock_station(), Game.s.fit, Game.s.paint, not job.is_empty() and job.get("type", "") == "cargo")
+		interior.build_station(dock_station(), Game.s.bp, Game.s.paint, not job.is_empty() and job.get("type", "") == "cargo")
 		walker.global_transform = xf2
 		walker.yaw = yaw2
 	panel_hangar = false
@@ -687,7 +724,7 @@ func _station_node(id: String) -> Dictionary:
 func undock() -> void:
 	if state == "flying":
 		return
-	preview_fit = {}
+	preview_bp = {}
 	pend_paint = {}
 	menu_layer.visible = false
 	station_ui.visible = false
@@ -766,10 +803,9 @@ func _promo_text(rk0: int) -> String:
 	if rk1 <= rk0:
 		return ""
 	var un := []
-	for slot in Game.SLOTS:
-		for id in Game.PARTS[slot[0]]:
-			if int(Game.PARTS[slot[0]][id].rank) == rk1:
-				un.append(Game.PARTS[slot[0]][id].n)
+	for id in Game.MODULES:
+		if int(Game.MODULES[id].rank) == rk1:
+			un.append(Game.MODULES[id].n)
 	return "\n\n[color=#ffb547][b]Befördert zum %s![/b][/color]%s" % [Game.rank_name(rk1), (" Neu freigeschaltet: " + ", ".join(un)) if un.size() > 0 else ""]
 
 # ------------------------------------------------------------------ Schaden & Kampf
@@ -842,22 +878,22 @@ func _player_destroyed() -> void:
 	player.model.visible = false
 	hud.release_all()
 	hud.flash(0.9)
-	var parts := {}
-	for sl in Game.SLOTS:
-		var k: String = sl[0]
-		if Game.s.fit[k] != Game.BASE_FIT[k]:
-			parts[k] = Game.s.fit[k]
-			Game.s.owned[k].erase(Game.s.fit[k])
+	var lost := {}
+	var names := []
+	for id in Game.bp_counts(Game.s.bp):
+		if int(Game.mod(id).price) > 0:
+			lost[id] = int(Game.bp_counts(Game.s.bp)[id])
+			names.append(("%d× " % lost[id] if int(lost[id]) > 1 else "") + String(Game.mod(id).n))
 	var old_lost: bool = not Game.s.wreck.is_empty()
+	var protected: bool = bool(S.get("bake", false))
 	var txt := "Die Rettungskapsel hat dich nach [b]%s[/b] gebracht. Die Versicherung stellt dir einen Spatz mit Grundausstattung." % dock_station().n
-	if parts.size() > 0:
-		var names := []
-		for k in parts:
-			names.append(Game.part(k, parts[k]).n)
-		Game.s.wreck = {"sys": world.sys_id, "pos": _arr(player.pos), "parts": parts, "name": Game.s.name, "paint": Game.s.paint.duplicate(),
-			"fit": Game.s.fit.duplicate(), "protected": Game.s.fit.extra == "bake"}
-		txt += "\n\n[color=#ff8c3a][b]Dein Wrack treibt in %s.[/b][/color] Darin: %s. Flieg hin und berge es – die Teile landen wieder in deinem Lager." % [Universe.system(world.sys_id).n, ", ".join(names)]
-		if not Game.s.fit.extra == "bake":
+	# Entwurf des verlorenen Schiffs merken, damit man es wieder aufbauen kann
+	_remember_design(Game.s.bp, Game.s.name + " (vor dem Wrack)")
+	if lost.size() > 0:
+		Game.s.wreck = {"sys": world.sys_id, "pos": _arr(player.pos), "mods": lost, "name": Game.s.name, "paint": Game.s.paint.duplicate(),
+			"bp": Game.copy_bp(Game.s.bp), "protected": protected}
+		txt += "\n\n[color=#ff8c3a][b]Dein Wrack treibt in %s.[/b][/color] Darin: %s. Flieg hin und berge es – die Module landen in deinem Lager, den Bauplan findest du unter Blaupausen." % [Universe.system(world.sys_id).n, ", ".join(names)]
+		if not protected:
 			txt += " Beeil dich, Plünderer haben es auch schon entdeckt."
 	if old_lost:
 		txt += "\n\nDein vorheriges Wrack haben Plünderer inzwischen ausgeschlachtet."
@@ -865,7 +901,7 @@ func _player_destroyed() -> void:
 		txt += "\n\nDie Ladung [b]%s[/b] ist verloren, der Auftrag gescheitert." % job.cargo
 		job = {}
 		nav = {}
-	Game.s.fit = Game.BASE_FIT.duplicate()
+	Game.s.bp = Game.template_bp(Game.START_TEMPLATE)
 	Game.s.streak = 0
 	Game.s.hull = 100.0
 	Game.s.job = job
@@ -881,7 +917,7 @@ func _respawn() -> void:
 		_new_combat()
 	wreck_node = null
 	Game.s.system = st.sys
-	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
+	player.setup(Game.s.bp, Game.s.paint, world, Game.s.tune)
 	S = player.S
 	player.alive = true
 	combat.ships = [player]
@@ -907,7 +943,7 @@ func spawn_pirates(count: int, tier: int, center: Vector3, leader_name := "", ta
 		n.rng.seed = rng.randi()
 		n.faction = "pirate"
 		var t := clampi(tier + (1 if i == 0 and leader_name != "" else 0), 0, 3)
-		n.setup(Npc.pirate_fit(t, rng), Npc.pirate_paint(rng), world.dynamic)
+		n.setup(Npc.pirate_bp(t, rng), Npc.pirate_paint(rng), world.dynamic)
 		n.pos = center + Vector3(rng.randf_range(-150, 150), rng.randf_range(-80, 80), rng.randf_range(-150, 150))
 		var to_p := (player.pos - n.pos).normalized()
 		n.quat = Basis.looking_at(to_p, Vector3.UP).get_rotation_quaternion()
@@ -942,11 +978,7 @@ func _spawn_trader() -> void:
 	var n := Npc.new()
 	n.rng.seed = rng.randi()
 	n.faction = "trader"
-	var f := {"frame": ["esel", "kondor", "spatz"][rng.randi() % 3], "engine": "orion", "rcs": "rcs1", "weapon": "puls1", "shield": "s1", "cargo": "k28", "armor": "a1", "extra": "x0"}
-	f = Game.fix_cargo(f)
-	if f.frame != "spatz":
-		f.cargo = "k60"
-	n.setup(f, Npc.trader_paint(rng), world.dynamic)
+	n.setup(Npc.trader_bp(rng), Npc.trader_paint(rng), world.dynamic)
 	n.model.get_meta("load").visible = true
 	var start := a.lerp(b, rng.randf_range(0.0, 0.6))
 	n.pos = start + Vector3(rng.randf_range(-200, 200), rng.randf_range(-100, 100), rng.randf_range(-200, 200))
@@ -1036,7 +1068,7 @@ func _spawn_wreck_node() -> void:
 	var w: Dictionary = Game.s.wreck
 	if w.is_empty() or w.sys != world.sys_id:
 		return
-	var f: Dictionary = w.get("fit", Game.BASE_FIT)
+	var f: Dictionary = Game.clean_bp(w.get("bp", Game.template_bp(Game.START_TEMPLATE)))
 	var p: Dictionary = w.get("paint", Game.s.paint).duplicate()
 	p.hull = "#3a3632"
 	p.accent = "#4a3a30"
@@ -1054,20 +1086,30 @@ func _spawn_wreck_node() -> void:
 	wreck_node.global_position = _v3(w.pos)
 	wreck_node.rotation = Vector3(0.6, 1.1, 0.4)
 
+func _remember_design(bp: Dictionary, name: String) -> void:
+	for d in Game.s.designs:
+		if Game.clean_bp(d).mods == bp.mods:
+			return
+	Game.s.designs.push_front({"n": name, "mods": Game.copy_bp(bp).mods})
+	while Game.s.designs.size() > 12:
+		Game.s.designs.pop_back()
+
 func _salvage() -> void:
 	var w: Dictionary = Game.s.wreck
 	var names := []
-	for k in w.parts:
-		if not Game.s.owned[k].has(w.parts[k]):
-			Game.s.owned[k].append(w.parts[k])
-		names.append(Game.part(k, w.parts[k]).n)
+	for id in w.get("mods", {}):
+		if Game.MODULES.has(id):
+			Game.inv_add(id, int(w.mods[id]))
+			names.append(("%d× " % int(w.mods[id]) if int(w.mods[id]) > 1 else "") + String(Game.mod(id).n))
+	if w.has("bp"):
+		_remember_design(Game.clean_bp(w.bp), String(w.get("name", "Wrack")) + " (geborgen)")
 	Game.s.wreck = {}
 	Game.save_game()
 	if wreck_node:
 		combat.explode(wreck_node.global_position, 4.0)
 		wreck_node.queue_free()
 		wreck_node = null
-	show_modal("Wrack geborgen", "Im Laderaum: [b]%s[/b].\n\nDie Teile liegen in deinem Lager. Geh an Bord zu den Konsolen und bau sie wieder ein." % ", ".join(names))
+	show_modal("Wrack geborgen", "Im Laderaum: [b]%s[/b].\n\nDie Module liegen in deinem Lager. Am Blaupausen-Tisch kannst du dein altes Schiff wieder aufbauen – ohne die Module neu zu kaufen." % ", ".join(names))
 
 # ------------------------------------------------------------------ Reisen
 func _resolve_nav() -> Dictionary:
@@ -1286,17 +1328,13 @@ func physics(dt: float) -> void:
 	player.tick(dt)
 
 	# Waffen
-	var w := player.weapon
-	if hud.firing and player.fire_cd <= 0.0 and player.energy >= float(w.energy):
-		player.fire_cd = 1.0 / float(w.rate)
-		player.energy -= float(w.energy)
-		var aim := fwd
-		if target != null and target.alive:
-			var ld := ShipState.lead_dir(player.pos, player.vel, target.pos, target.vel, float(w.speed))
-			if fwd.angle_to(ld) < 0.26:
-				aim = ld
-		for m in player.muzzles():
-			combat.spawn_bolt(player, m, aim, w)
+	if hud.firing:
+		player.fire_groups(combat, func(w: Dictionary) -> Vector3:
+			if target != null and target.alive:
+				var ld := ShipState.lead_dir(player.pos, player.vel, target.pos, target.vel, float(w.speed))
+				if fwd.angle_to(ld) < 0.26:
+					return ld
+			return fwd)
 
 	var sp := vel.length()
 	var sr: float = S.dim.z * 0.45
@@ -1536,6 +1574,11 @@ func _fill_menu() -> void:
 	menu_box.add_child(K.lbl("Bordcomputer", 22, K.FG, K.F_BOLD))
 	var cur := world.sys_id
 	menu_box.add_child(K.wrap("System %s · %s · Rang %s · %s cr" % [Universe.system(cur).n, Universe.system(cur).desc, Game.rank_name(Game.rank()), Game.fmt(Game.s.credits)], 12))
+	if state in ["walk", "panel"]:
+		var bb := K.btn("Blaupause öffnen – Schiff entwerfen und umbauen", func():
+			menu_layer.visible = false
+			open_blueprint(), true)
+		menu_box.add_child(bb)
 	if state in ["flying", "walk", "panel"]:
 		menu_box.add_child(K.caps("Navigationsziel"))
 		for sid in Universe.SYSTEMS:
@@ -1647,7 +1690,7 @@ func _process(delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	if state == "panel" and panel_hangar and event is InputEventScreenDrag:
 		var vs := get_viewport().get_visible_rect().size
-		if event.position.x < vs.x * (1.0 - StationUI.PANEL_FRAC):
+		if event.position.x < vs.x * (1.0 - hangar.panel_frac) and not (bp_ui.visible and not bp_ui.view3d):
 			hangar.drag(event.relative)
 	if event is InputEventKey and event.pressed and not event.echo and state == "flying":
 		match event.physical_keycode:

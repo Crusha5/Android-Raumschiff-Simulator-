@@ -113,7 +113,9 @@ static func btn(text: String, cb: Callable, on := false, disabled := false) -> B
 		b.theme_type_variation = "BtnOn"
 	b.disabled = disabled
 	b.custom_minimum_size = Vector2(0, 40)
-	b.pressed.connect(cb)
+	b.pressed.connect(func():
+		if cb.is_valid() and TouchScroll.tap_ok():
+			cb.call())
 	return b
 
 static func hbox(sep := 8) -> HBoxContainer:
