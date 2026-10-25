@@ -1,6 +1,6 @@
 class_name StationUI
 extends Control
-## Stationsmenü im Hangar: Frachtbörse, Werft (Bauteile), Lackiererei.
+## Gesprächs- und Werkstattfenster: Aufträge, Ausrüster, Lackiererei, Bar, Schiffskonsole.
 
 const K = preload("res://scripts/ui_kit.gd")
 const PANEL_FRAC := 0.5
@@ -9,23 +9,24 @@ const STAT_ROWS := [
 	["Beschleunigung", "acc", "m/s²", 150.0, 1],
 	["Höchstgeschw.", "vmax", "m/s", 560.0, 1],
 	["Wendigkeit", "turn", "%", 250.0, 1],
-	["Frachtraum", "cap", "t", 120.0, 1],
+	["Feuerkraft", "dps", "dps", 220.0, 1],
+	["Schild", "shield", "", 260.0, 1],
 	["Hülle", "hp_max", "HP", 400.0, 1],
-	["Schutz", "prot", "%", 50.0, 1],
-	["Leermasse", "dry", "t", 95.0, -1]]
+	["Frachtraum", "cap", "t", 120.0, 1],
+	["Leermasse", "dry", "t", 110.0, -1]]
 
 var main: Node
-var tab := "fracht"
-var w_slot := "engine"
+var mode := "jobs"
+var slot := "engine"
+var title := ""
+var subtitle := ""
 
 var panel: PanelContainer
-var station_lbl: Label
-var name_lbl: Label
+var sub_lbl: Label
+var title_lbl: Label
 var credits_lbl: Label
-var tab_btns := {}
 var scroll: ScrollContainer
 var content: VBoxContainer
-var foot_lbl: Label
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -44,10 +45,10 @@ func _ready() -> void:
 	panel.add_child(v)
 	var head := K.hbox(10)
 	var hl := K.vbox(0)
-	station_lbl = K.caps("Station")
-	name_lbl = K.lbl("«Möwe»", 22, K.FG, K.F_BOLD)
-	hl.add_child(station_lbl)
-	hl.add_child(name_lbl)
+	sub_lbl = K.caps("Station")
+	title_lbl = K.lbl("", 21, K.FG, K.F_BOLD)
+	hl.add_child(sub_lbl)
+	hl.add_child(title_lbl)
 	head.add_child(hl)
 	head.add_child(K.spacer())
 	var hr := K.vbox(0)
@@ -59,15 +60,6 @@ func _ready() -> void:
 	hr.add_child(credits_lbl)
 	head.add_child(hr)
 	v.add_child(head)
-	var tabs := HBoxContainer.new()
-	tabs.add_theme_constant_override("separation", 6)
-	for t in [["fracht", "Fracht"], ["werft", "Werft"], ["lack", "Lackiererei"]]:
-		var id: String = t[0]
-		var b := K.btn(t[1], func(): _set_tab(id))
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tabs.add_child(b)
-		tab_btns[id] = b
-	v.add_child(tabs)
 	scroll = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -75,41 +67,59 @@ func _ready() -> void:
 	content = K.vbox(10)
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(content)
-	var foot := K.hbox(8)
-	var und := K.btn("Abdocken", func(): main.undock(), true)
-	und.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	und.custom_minimum_size = Vector2(0, 46)
-	und.add_theme_font_size_override("font_size", 16)
-	foot.add_child(und)
-	foot.add_child(K.btn("Menü", func(): main.open_menu()))
-	v.add_child(foot)
+	var back := K.btn("Zurück", func(): main.close_panel(), true)
+	back.custom_minimum_size = Vector2(0, 46)
+	back.add_theme_font_size_override("font_size", 16)
+	v.add_child(back)
 
-func _set_tab(id: String) -> void:
-	if tab != id:
-		tab = id
-		main.clear_previews()
-		scroll.scroll_vertical = 0
+func open(m: String, t: String, sub: String, s := "") -> void:
+	mode = m
+	title = t
+	subtitle = sub
+	if s != "":
+		slot = s
+	scroll.scroll_vertical = 0
+	visible = true
 	refresh()
 
 func refresh() -> void:
 	var sv := scroll.scroll_vertical
-	var st: Dictionary = main.dock_station()
-	station_lbl.text = String(st.name).to_upper()
-	name_lbl.text = "«%s»" % Game.s.name
+	sub_lbl.text = subtitle.to_upper()
+	title_lbl.text = title
 	credits_lbl.text = Game.fmt(Game.s.credits) + " cr"
-	for id in tab_btns:
-		tab_btns[id].theme_type_variation = "BtnOn" if id == tab else ""
 	for c in content.get_children():
 		content.remove_child(c)
 		c.queue_free()
-	match tab:
-		"fracht": _fracht()
-		"werft": _werft()
-		"lack": _lack()
+	match mode:
+		"jobs": _jobs()
+		"shop": _shop()
+		"console": _console()
+		"paint": _paint()
+		"bar": _bar()
 	await get_tree().process_frame
 	scroll.scroll_vertical = sv
 
-# ---------------------------------------------------------------- Fracht
+func _rich(text: String, size := 13, col := K.FG) -> RichTextLabel:
+	var rl := RichTextLabel.new()
+	rl.bbcode_enabled = true
+	rl.fit_content = true
+	rl.scroll_active = false
+	rl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rl.add_theme_font_size_override("normal_font_size", size)
+	rl.add_theme_font_size_override("bold_font_size", size)
+	rl.add_theme_font_override("normal_font", K.F_REG)
+	rl.add_theme_font_override("bold_font", K.F_BOLD)
+	rl.add_theme_color_override("default_color", col)
+	rl.text = text
+	rl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return rl
+
+func _say(text: String) -> void:
+	var c := K.card("CardGoal")
+	c.add_child(_rich("[i]„%s“[/i]" % text, 13, K.FG))
+	content.add_child(c)
+
+# ---------------------------------------------------------------- Rang
 func _rank_box() -> Control:
 	var rk := Game.rank()
 	var xp := int(Game.s.xp)
@@ -132,72 +142,29 @@ func _rank_box() -> Control:
 		bar.set_value(1.0, K.AMBER)
 	v.add_child(r)
 	v.add_child(bar)
-	if rk + 1 < Game.RANKS.size():
-		var un := []
-		for slot in Game.SLOTS:
-			for id in Game.PARTS[slot[0]]:
-				if int(Game.PARTS[slot[0]][id].rank) == rk + 1:
-					un.append(Game.PARTS[slot[0]][id].n)
-		if un.size() > 0:
-			v.add_child(K.wrap("Ab %s: %s" % [Game.rank_name(rk + 1), ", ".join(un)], 12))
 	var g: Dictionary = main.next_goal()
 	if not g.is_empty():
 		var miss: int = int(g.p.price) - int(Game.s.credits)
-		var gl := RichTextLabel.new()
-		gl.bbcode_enabled = true
-		gl.fit_content = true
-		gl.scroll_active = false
-		gl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		gl.add_theme_font_size_override("normal_font_size", 12)
-		gl.add_theme_font_override("normal_font", K.F_REG)
-		gl.add_theme_font_override("bold_font", K.F_SEMI)
-		gl.add_theme_color_override("default_color", K.MUTED)
 		var tail := "noch [color=#ece5d3]%s cr[/color]" % Game.fmt(miss) if miss > 0 else "[color=#7fe08a][b]jetzt leistbar[/b][/color]"
-		gl.text = "Nächstes Upgrade: [color=#9fd4ff][b]%s[/b][/color] · %s" % [g.p.n, tail]
-		v.add_child(gl)
+		v.add_child(_rich("Nächstes Upgrade: [color=#9fd4ff][b]%s[/b][/color] · %s" % [g.p.n, tail], 12, K.MUTED))
 	if int(Game.s.streak) > 0:
 		v.add_child(K.wrap("Lieferserie: %d ohne Kratzer · Lohn ×%s" % [int(Game.s.streak), String.num(Game.streak_mult(), 2).replace(".", ",")], 12, K.OK))
 	return card
 
-func _fracht() -> void:
-	var lr: Dictionary = main.last_result
-	if not lr.is_empty():
-		var c := K.card("CardBad" if lr.get("bad", false) else "CardGood")
-		var rl := RichTextLabel.new()
-		rl.bbcode_enabled = true
-		rl.fit_content = true
-		rl.scroll_active = false
-		rl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		rl.add_theme_font_size_override("normal_font_size", 13)
-		rl.add_theme_font_size_override("bold_font_size", 13)
-		rl.add_theme_font_override("normal_font", K.F_REG)
-		rl.add_theme_font_override("bold_font", K.F_BOLD)
-		rl.text = lr.text
-		c.add_child(rl)
-		content.add_child(c)
+# ---------------------------------------------------------------- Aufträge
+func _jobs() -> void:
+	_say(["Pünktlich und heil ankommen, dann zahlt sich das aus.", "Ich hab da was für dich, wenn du Platz im Laderaum hast.", "Vorsicht auf den Routen nach Nyx – da draußen wird geschossen."][randi() % 3])
 	content.add_child(_rank_box())
 	var job: Dictionary = main.job
 	if not job.is_empty():
 		content.add_child(K.caps("Aktiver Auftrag"))
-		var c := _offer_card(job, -1, "")
-		content.add_child(c)
-	else:
-		content.add_child(K.caps("Frachtbörse · Frachtraum %d t" % int(main.S.cap)))
-		var offers: Array = main.offers
-		for i in offers.size():
-			content.add_child(_offer_card(offers[i], i, main.lock_reason(offers[i])))
-	var dmg := roundi(100.0 - main.ship_hull())
-	var cost := roundi(dmg * float(main.S.hp_max) * 0.09)
-	content.add_child(K.caps("Reparatur"))
-	var r := K.hbox(8)
-	r.add_child(K.lbl("Hülle %d%%" % roundi(main.ship_hull()), 13, K.MUTED, K.F_REG))
-	r.add_child(K.spacer())
-	if dmg > 0:
-		r.add_child(K.btn("Reparieren · %s cr" % Game.fmt(cost), func(): main.repair(), false, int(Game.s.credits) < cost))
-	else:
-		r.add_child(K.lbl("Kein Schaden", 13, K.MUTED, K.F_REG))
-	content.add_child(r)
-	content.add_child(K.lbl("Lieferungen: %d · Beste Serie: %d" % [int(Game.s.deliveries), int(Game.s.best)], 12, K.MUTED, K.F_REG))
+		content.add_child(_offer_card(job, -1, ""))
+		return
+	content.add_child(K.caps("Frachtaufträge · Frachtraum %d t" % int(main.S.cap)))
+	var offers: Array = main.offers
+	for i in offers.size():
+		content.add_child(_offer_card(offers[i], i, main.lock_reason(offers[i])))
+	content.add_child(K.lbl("Lieferungen: %d · Abschüsse: %d · Beste Serie: %d" % [int(Game.s.deliveries), int(Game.s.kills), int(Game.s.best)], 12, K.MUTED, K.F_REG))
 
 func _offer_card(o: Dictionary, i: int, lock: String) -> Control:
 	var c := K.card()
@@ -206,29 +173,37 @@ func _offer_card(o: Dictionary, i: int, lock: String) -> Control:
 	var v := K.vbox(4)
 	c.add_child(v)
 	var r1 := K.hbox(8)
-	r1.add_child(K.lbl(o.cargo, 15, K.FG))
+	var bounty: bool = o.get("type", "cargo") == "bounty"
+	r1.add_child(K.lbl(("Kopfgeld: " + o.target) if bounty else o.cargo, 15, K.FG))
 	if o.get("fragile", false):
 		r1.add_child(_tag("ZERBRECHLICH", K.DANGER))
 	if o.get("express", false):
 		r1.add_child(_tag("EXPRESS", K.ICE))
+	if bounty:
+		r1.add_child(_tag("KAMPF", K.DANGER))
+	elif o.get("dest_sys", "") != Game.s.system:
+		r1.add_child(_tag("%d SPRUNG" % Universe.jumps(Game.s.system, o.dest_sys), K.AMBER))
 	r1.add_child(K.spacer())
-	var pay: float = o.pay * (Game.streak_mult() if i >= 0 else 1.0)
+	var pay: float = o.pay * (Game.streak_mult() if i >= 0 and not bounty else 1.0)
 	r1.add_child(K.lbl(Game.fmt(pay) + " cr", 15, K.AMBER, K.F_MONO))
 	v.add_child(r1)
 	var r2 := K.hbox(8)
-	var tm: float = o.time * (float(main.S.time) if i >= 0 else 1.0)
-	var det := "%d t nach %s · %.1f km · Bonus bei < %s min" % [int(o.mass), o.dest.name, o.dist / 1000.0, Game.mmss(tm)]
-	if i < 0:
-		det = "%d t nach %s · Zustand %d%%" % [int(o.mass), o.dest.name, roundi(o.cond)]
+	var det := ""
+	if bounty:
+		det = "%s · %s · %d Begleiter" % [o.sys_name, o.zone_name, int(o.count)]
+	elif i >= 0:
+		var tm: float = o.time * float(main.S.time)
+		det = "%d t nach %s (%s) · %s · Bonus bei < %s min" % [int(o.mass), o.dest_name, Universe.system(o.dest_sys).n, Game.dist_txt(o.dist), Game.mmss(tm)]
+	else:
+		det = "%d t nach %s · Zustand %d%%" % [int(o.mass), o.dest_name, roundi(o.cond)]
 	r2.add_child(K.wrap(det, 12))
 	if i >= 0:
 		if lock != "":
-			var ll := K.caps(lock, K.MUTED, 11)
-			r2.add_child(ll)
+			r2.add_child(K.caps(lock, K.MUTED, 11))
 		else:
-			r2.add_child(K.btn("Annehmen", func(): main.take_offer(i), true))
+			r2.add_child(K.btn("Annehmen", func(): main.take_offer(o), true))
 	else:
-		r2.add_child(K.btn("Abbrechen −%s cr" % Game.fmt(o.pay * 0.25), func(): main.cancel_job()))
+		r2.add_child(K.btn("Abbrechen −%s cr" % Game.fmt(float(o.pay) * 0.25), func(): main.cancel_job()))
 	v.add_child(r2)
 	return c
 
@@ -237,60 +212,108 @@ func _tag(text: String, col: Color) -> Control:
 	l.add_theme_stylebox_override("normal", UIKit.box_style(Color(0, 0, 0, 0), col, 1, 3, Vector2(5, 1)))
 	return l
 
-# ---------------------------------------------------------------- Werft
-func _werft() -> void:
+# ---------------------------------------------------------------- Bar
+func _bar() -> void:
+	for line in main.news_lines():
+		_say(line)
+	content.add_child(_rank_box())
+	var job: Dictionary = main.job
+	if not job.is_empty():
+		content.add_child(K.caps("Aktiver Auftrag"))
+		content.add_child(_offer_card(job, -1, ""))
+		return
+	content.add_child(K.caps("Kopfgeld-Aufträge"))
+	var b: Array = main.bounties
+	if b.is_empty():
+		content.add_child(K.wrap("Heute keine Kopfgelder. Komm später wieder.", 13))
+	for o in b:
+		content.add_child(_offer_card(o, 0, main.lock_reason(o)))
+
+# ---------------------------------------------------------------- Ausrüster
+func _shop() -> void:
+	var st: Dictionary = main.dock_station()
+	var shop_lvl := int(st.shop)
+	_say("Alles, was du hier siehst, kann ich dir sofort einbauen. Ausgebaute Teile lege ich dir ins Lager." if shop_lvl < 3 else "Willkommen in der besten Werft weit und breit. Hier gibt's alles – wenn du's bezahlen kannst.")
+	var hull_frac: float = main.ship_hull_frac()
+	if hull_frac < 0.999:
+		var r := K.hbox(8)
+		var cost: int = main.repair_cost()
+		r.add_child(K.lbl("Hülle %d%%" % roundi(hull_frac * 100.0), 13, K.DANGER, K.F_REG))
+		r.add_child(K.spacer())
+		r.add_child(K.btn("Reparieren · %s cr" % Game.fmt(cost), func(): main.repair(), true, int(Game.s.credits) < cost))
+		content.add_child(r)
 	var chips := HFlowContainer.new()
 	chips.add_theme_constant_override("h_separation", 6)
 	chips.add_theme_constant_override("v_separation", 6)
-	for s in Game.SLOTS:
-		var id: String = s[0]
-		var b := K.btn(s[1], func(): _pick_slot(id), id == w_slot)
+	for sl in Game.SLOTS:
+		var id: String = sl[0]
+		var b := K.btn(sl[1], func(): _pick_slot(id), id == slot)
 		b.custom_minimum_size = Vector2(0, 36)
 		chips.add_child(b)
 	content.add_child(chips)
 	content.add_child(_stats_box(main.S, Game.stats(main.view_fit())))
+	_part_list(true, shop_lvl)
+	content.add_child(K.wrap("Tippe ein Teil an, um es am Schiff anzuprobieren.", 12))
+
+func _console() -> void:
+	_say("Bordrechner: Modul %s. Hier tauschst du Teile aus deinem Lager. Neue Teile gibt es beim Ausrüster." % _slot_name(slot))
+	content.add_child(_stats_box(main.S, Game.stats(main.view_fit())))
+	_part_list(false, -1)
+
+func _slot_name(s: String) -> String:
+	for sl in Game.SLOTS:
+		if sl[0] == s:
+			return sl[1]
+	return s
+
+func _part_list(shop: bool, shop_lvl: int) -> void:
 	var rk := Game.rank()
 	var fit: Dictionary = Game.s.fit
 	var vf: Dictionary = main.view_fit()
-	for id in Game.PARTS[w_slot]:
-		var p: Dictionary = Game.PARTS[w_slot][id]
-		var own: bool = Game.s.owned[w_slot].has(id)
-		var eq: bool = fit[w_slot] == id
-		var sel: bool = vf[w_slot] == id and not eq
-		var fits := not (w_slot == "cargo" and int(p.size) > int(Game.part("frame", fit.frame).max_mod))
-		var too_small: bool = w_slot == "cargo" and not main.job.is_empty() and int(p.cap) < int(main.job.mass)
+	for id in Game.PARTS[slot]:
+		var p: Dictionary = Game.PARTS[slot][id]
+		var own: bool = Game.s.owned[slot].has(id)
+		if not shop and not own:
+			continue
+		var sold := int(p.tier) <= shop_lvl
+		var eq: bool = fit[slot] == id
+		var sel: bool = vf[slot] == id and not eq
+		var fits := not (slot == "cargo" and int(p.size) > int(Game.part("frame", fit.frame).max_mod))
+		var too_small: bool = slot == "cargo" and not main.job.is_empty() and main.job.get("type", "") == "cargo" and int(p.cap) < int(main.job.mass)
 		var c := K.card("CardEq" if eq else ("CardSel" if sel else "Card"))
-		if int(p.rank) > rk:
+		if int(p.rank) > rk or (shop and not own and not sold):
 			c.modulate = Color(1, 1, 1, 0.55)
 		var v := K.vbox(4)
 		c.add_child(v)
 		var r1 := K.hbox(8)
-		var nm := K.lbl(p.n, 15, K.FG)
-		r1.add_child(nm)
+		r1.add_child(K.lbl(p.n, 15, K.FG))
 		if own and not eq:
 			r1.add_child(K.lbl("im Lager", 11, K.MUTED, K.F_REG))
 		r1.add_child(K.spacer())
 		if eq:
 			r1.add_child(K.caps("Eingebaut", K.OK))
-		elif int(p.rank) > rk:
-			r1.add_child(K.caps("Ab " + Game.rank_name(int(p.rank))))
 		elif not fits:
 			r1.add_child(K.caps("Rumpf zu klein"))
 		elif too_small:
 			r1.add_child(K.caps("Ladung passt nicht"))
 		elif own:
-			r1.add_child(K.btn("Einbauen", func(): main.equip(w_slot, id), true))
+			r1.add_child(K.btn("Einbauen", func(): main.equip(slot, id), true))
+		elif int(p.rank) > rk:
+			r1.add_child(K.caps("Ab " + Game.rank_name(int(p.rank))))
+		elif not sold:
+			r1.add_child(K.caps("Nicht im Angebot"))
 		else:
-			r1.add_child(K.btn("Kaufen · %s cr" % Game.fmt(p.price), func(): main.buy(w_slot, id), true, int(Game.s.credits) < int(p.price)))
+			r1.add_child(K.btn("Kaufen · %s cr" % Game.fmt(p.price), func(): main.buy(slot, id), true, int(Game.s.credits) < int(p.price)))
 		v.add_child(r1)
-		var meta := _part_meta(w_slot, p)
-		if p.d != "" and w_slot != "extra":
+		var meta := _part_meta(slot, p)
+		if p.d != "" and slot != "extra":
 			meta += " · " + p.d
+		if shop and not own and not sold:
+			meta += " · erhältlich bei: " + main.where_sold(int(p.tier))
 		v.add_child(K.wrap(meta, 12))
 		var pid: String = id
 		c.gui_input.connect(func(ev: InputEvent): _card_tap(ev, pid))
 		content.add_child(c)
-	content.add_child(K.wrap("Tippe ein Teil an, um es am Schiff anzuprobieren. Gekaufte Teile bleiben in deinem Lager.", 12))
 
 var _tap_start := Vector2.ZERO
 func _card_tap(ev: InputEvent, id: String) -> void:
@@ -298,10 +321,10 @@ func _card_tap(ev: InputEvent, id: String) -> void:
 		if ev.pressed:
 			_tap_start = ev.global_position
 		elif ev.global_position.distance_to(_tap_start) < 14.0:
-			main.try_part(w_slot, id)
+			main.try_part(slot, id)
 
 func _pick_slot(id: String) -> void:
-	w_slot = id
+	slot = id
 	main.clear_previews()
 	refresh()
 
@@ -313,6 +336,10 @@ func _part_meta(k: String, p: Dictionary) -> String:
 			return "%s kN · %d m/s · %s t" % [Game.fmt(p.thrust), int(p.vmax), str(p.mass)]
 		"rcs":
 			return "Wendigkeit ×%s" % str(p.turn).replace(".", ",")
+		"weapon":
+			return "%d dps · %s m Reichweite · %s Energie/Schuss" % [roundi(float(p.dmg) * float(p.rate) * 2.0), Game.fmt(p.range), str(p.energy)]
+		"shield":
+			return "%d Kapazität · %d/s Aufladung" % [int(p.cap), int(p.regen)]
 		"cargo":
 			return "%d t · Größe %s · %s t" % [int(p.cap), ["", "S", "M", "L"][int(p.size)], str(p.mass)]
 		"armor":
@@ -325,7 +352,6 @@ static func stat_value(st: Dictionary, key: String) -> float:
 	match key:
 		"acc": return float(st.thrust) / float(st.dry)
 		"turn": return float(st.turn) * 100.0
-		"prot": return (1.0 - float(st.dmg)) * 100.0
 	return float(st[key])
 
 func _stats_box(a: Dictionary, b: Dictionary) -> Control:
@@ -359,7 +385,8 @@ func _stats_box(a: Dictionary, b: Dictionary) -> Control:
 	return c
 
 # ---------------------------------------------------------------- Lackiererei
-func _lack() -> void:
+func _paint() -> void:
+	_say("Farbe ist mehr als Deko – man soll dich erkennen, wenn du andockst.")
 	var p: Dictionary = main.view_paint()
 	var rk := Game.rank()
 	content.add_child(K.caps("Rufname"))

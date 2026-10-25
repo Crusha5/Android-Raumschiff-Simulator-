@@ -3,6 +3,12 @@ shader_type sky;
 render_mode use_half_res_pass;
 #include "res://shaders/sky_common.gdshaderinc"
 
+vec3 sun_glow(vec3 d) {
+	float sd = max(dot(d, LIGHT0_DIRECTION), 0.0);
+	return LIGHT0_COLOR * (pow(sd, 5000.0) * 40.0 + pow(sd, 600.0) * 0.8 + pow(sd, 60.0) * 0.05) * LIGHT0_ENERGY;
+}
+
+
 void sky() {
 	vec3 d = normalize(EYEDIR);
 	float band = exp(-pow(dot(d, normalize(band_normal)) / 0.28, 2.0));

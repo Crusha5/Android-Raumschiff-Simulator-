@@ -3,44 +3,62 @@ extends Node
 
 const SAVE_PATH := "user://frachtpilot_save.json"
 
-const SLOTS := [["frame", "Rumpf"], ["engine", "Triebwerk"], ["rcs", "Düsen"], ["cargo", "Fracht"], ["armor", "Panzer"], ["extra", "Extra"]]
+const SLOTS := [["frame", "Rumpf"], ["engine", "Triebwerk"], ["rcs", "Düsen"], ["weapon", "Waffen"], ["shield", "Schild"],
+	["cargo", "Fracht"], ["armor", "Panzer"], ["extra", "Extra"]]
 
+const BASE_FIT := {"frame": "spatz", "engine": "funke", "rcs": "rcs1", "weapon": "puls1", "shield": "s0", "cargo": "k12", "armor": "a0", "extra": "x0"}
+
+## tier = Ausstattungsstufe einer Werft (0–3). Höhere Stufen gibt es nur an großen Werften.
 const PARTS := {
 	"frame": {
-		"spatz": {"n": "Spatz", "d": "Wendiger Einsteiger-Rumpf", "price": 0, "rank": 0, "mass": 16.0, "hp": 100, "max_mod": 1, "turn": 1.0, "dim": Vector3(5.0, 2.6, 11.0), "style": 0},
-		"esel": {"n": "Lastesel", "d": "Robuster Mittelklasse-Frachter", "price": 14000, "rank": 1, "mass": 28.0, "hp": 150, "max_mod": 2, "turn": 0.85, "dim": Vector3(6.6, 3.4, 15.0), "style": 1},
-		"pfeil": {"n": "Pfeil", "d": "Kurier-Rumpf: leicht, schnell, empfindlich", "price": 30000, "rank": 2, "mass": 13.0, "hp": 80, "max_mod": 1, "turn": 1.35, "dim": Vector3(4.4, 2.2, 14.0), "style": 2},
-		"kondor": {"n": "Kondor", "d": "Schwerlast-Rumpf für die größten Module", "price": 55000, "rank": 3, "mass": 45.0, "hp": 230, "max_mod": 3, "turn": 0.7, "dim": Vector3(8.6, 4.2, 20.0), "style": 3},
+		"spatz": {"n": "Spatz", "d": "Wendiger Einsteiger-Rumpf", "price": 0, "rank": 0, "tier": 0, "mass": 16.0, "hp": 100, "max_mod": 1, "turn": 1.0, "dim": Vector3(5.0, 2.6, 11.0), "style": 0},
+		"esel": {"n": "Lastesel", "d": "Robuster Mittelklasse-Frachter", "price": 14000, "rank": 1, "tier": 1, "mass": 28.0, "hp": 150, "max_mod": 2, "turn": 0.85, "dim": Vector3(6.6, 3.4, 15.0), "style": 1},
+		"pfeil": {"n": "Pfeil", "d": "Kurier-Rumpf: leicht, schnell, empfindlich", "price": 30000, "rank": 2, "tier": 2, "mass": 13.0, "hp": 80, "max_mod": 1, "turn": 1.35, "dim": Vector3(4.4, 2.2, 14.0), "style": 2},
+		"kondor": {"n": "Kondor", "d": "Schwerlast-Rumpf für die größten Module", "price": 55000, "rank": 3, "tier": 3, "mass": 45.0, "hp": 230, "max_mod": 3, "turn": 0.7, "dim": Vector3(8.6, 4.2, 20.0), "style": 3},
 	},
 	"engine": {
-		"funke": {"n": "Funke Mk1", "d": "Serientriebwerk", "price": 0, "rank": 0, "mass": 4.0, "thrust": 1300.0, "vmax": 260.0, "nac": 2, "r": 0.85, "len": 5.0, "flame": "#8fc8ff", "ring": false, "glow": false},
-		"orion": {"n": "Orion Mk2", "d": "Mehr Schub, höhere Spitze", "price": 6500, "rank": 0, "mass": 6.0, "thrust": 1900.0, "vmax": 330.0, "nac": 2, "r": 1.15, "len": 6.5, "flame": "#8fc8ff", "ring": true, "glow": false},
-		"hyperion": {"n": "Hyperion Mk3", "d": "Vier Düsen, enormer Schub", "price": 22000, "rank": 2, "mass": 9.0, "thrust": 3200.0, "vmax": 420.0, "nac": 4, "r": 0.95, "len": 7.0, "flame": "#ffad5a", "ring": false, "glow": false},
-		"ionen": {"n": "Ionenstrahl X", "d": "Spitzentechnik aus der Werft von Vesta", "price": 60000, "rank": 4, "mass": 11.0, "thrust": 4600.0, "vmax": 540.0, "nac": 2, "r": 1.35, "len": 9.5, "flame": "#c49bff", "ring": true, "glow": true},
+		"funke": {"n": "Funke Mk1", "d": "Serientriebwerk", "price": 0, "rank": 0, "tier": 0, "mass": 4.0, "thrust": 1300.0, "vmax": 260.0, "nac": 2, "r": 0.85, "len": 5.0, "flame": "#8fc8ff", "ring": false, "glow": false},
+		"orion": {"n": "Orion Mk2", "d": "Mehr Schub, höhere Spitze", "price": 6500, "rank": 0, "tier": 1, "mass": 6.0, "thrust": 1900.0, "vmax": 330.0, "nac": 2, "r": 1.15, "len": 6.5, "flame": "#8fc8ff", "ring": true, "glow": false},
+		"hyperion": {"n": "Hyperion Mk3", "d": "Vier Düsen, enormer Schub", "price": 22000, "rank": 2, "tier": 2, "mass": 9.0, "thrust": 3200.0, "vmax": 420.0, "nac": 4, "r": 0.95, "len": 7.0, "flame": "#ffad5a", "ring": false, "glow": false},
+		"ionen": {"n": "Ionenstrahl X", "d": "Spitzentechnik aus der Orion-Werft", "price": 60000, "rank": 4, "tier": 3, "mass": 11.0, "thrust": 4600.0, "vmax": 540.0, "nac": 2, "r": 1.35, "len": 9.5, "flame": "#c49bff", "ring": true, "glow": true},
 	},
 	"rcs": {
-		"rcs1": {"n": "Düsen Standard", "d": "Grundausstattung", "price": 0, "rank": 0, "mass": 1.0, "turn": 1.0, "strafe": 1.0, "k": 4, "acc": false},
-		"rcs2": {"n": "Düsen Plus", "d": "Schnelleres Drehen", "price": 3500, "rank": 0, "mass": 1.5, "turn": 1.2, "strafe": 1.25, "k": 4, "acc": false},
-		"rcs3": {"n": "Vektordüsen", "d": "Präzise beim Andocken", "price": 12000, "rank": 1, "mass": 2.0, "turn": 1.45, "strafe": 1.5, "k": 8, "acc": false},
-		"rcs4": {"n": "Gyro-Vektor", "d": "Dreht wie ein Jäger", "price": 30000, "rank": 3, "mass": 2.5, "turn": 1.75, "strafe": 1.8, "k": 8, "acc": true},
+		"rcs1": {"n": "Düsen Standard", "d": "Grundausstattung", "price": 0, "rank": 0, "tier": 0, "mass": 1.0, "turn": 1.0, "strafe": 1.0, "k": 4, "acc": false},
+		"rcs2": {"n": "Düsen Plus", "d": "Schnelleres Drehen", "price": 3500, "rank": 0, "tier": 1, "mass": 1.5, "turn": 1.2, "strafe": 1.25, "k": 4, "acc": false},
+		"rcs3": {"n": "Vektordüsen", "d": "Präzise beim Andocken und im Kurvenkampf", "price": 12000, "rank": 1, "tier": 2, "mass": 2.0, "turn": 1.45, "strafe": 1.5, "k": 8, "acc": false},
+		"rcs4": {"n": "Gyro-Vektor", "d": "Dreht wie ein Jäger", "price": 30000, "rank": 3, "tier": 3, "mass": 2.5, "turn": 1.75, "strafe": 1.8, "k": 8, "acc": true},
+	},
+	"weapon": {
+		"puls1": {"n": "Pulslaser Mk1", "d": "Zuverlässig, schnelle Schussfolge", "price": 0, "rank": 0, "tier": 0, "mass": 2.0, "dmg": 6.0, "rate": 5.0, "speed": 1100.0, "range": 1300.0, "energy": 4.0, "color": "#ff5a4e", "size": 1.0},
+		"puls2": {"n": "Pulslaser Mk2", "d": "Mehr Wumms, weiter", "price": 7000, "rank": 0, "tier": 1, "mass": 2.5, "dmg": 9.0, "rate": 6.0, "speed": 1300.0, "range": 1500.0, "energy": 5.0, "color": "#ff8a3a", "size": 1.1},
+		"plasma": {"n": "Plasmakanone", "d": "Langsam, aber jeder Treffer sitzt", "price": 18000, "rank": 1, "tier": 2, "mass": 4.0, "dmg": 26.0, "rate": 1.8, "speed": 850.0, "range": 1400.0, "energy": 12.0, "color": "#7fd1ff", "size": 2.2},
+		"gatling": {"n": "Partikel-Gatling", "d": "Sperrfeuer gegen wendige Jäger", "price": 32000, "rank": 2, "tier": 2, "mass": 4.5, "dmg": 4.5, "rate": 14.0, "speed": 1500.0, "range": 1200.0, "energy": 2.0, "color": "#ffe066", "size": 0.8},
+		"lanze": {"n": "Ionenlanze", "d": "Schwerste Bordwaffe, frisst Energie", "price": 65000, "rank": 4, "tier": 3, "mass": 6.0, "dmg": 42.0, "rate": 1.6, "speed": 2200.0, "range": 2000.0, "energy": 17.0, "color": "#c49bff", "size": 2.6},
+	},
+	"shield": {
+		"s0": {"n": "Basisschild", "d": "Hält ein paar Treffer ab", "price": 0, "rank": 0, "tier": 0, "mass": 1.0, "cap": 40.0, "regen": 6.0},
+		"s1": {"n": "Deflektor Mk2", "d": "Doppelte Kapazität", "price": 6000, "rank": 0, "tier": 1, "mass": 1.5, "cap": 80.0, "regen": 9.0},
+		"s2": {"n": "Prisma-Schild", "d": "Lädt schnell wieder auf", "price": 20000, "rank": 1, "tier": 2, "mass": 2.5, "cap": 150.0, "regen": 15.0},
+		"s3": {"n": "Bastion", "d": "Militärischer Schildgenerator", "price": 50000, "rank": 3, "tier": 3, "mass": 4.0, "cap": 260.0, "regen": 22.0},
 	},
 	"cargo": {
-		"k12": {"n": "Frachtkorb 12 t", "d": "Klein, passt überall", "price": 0, "rank": 0, "mass": 3.0, "cap": 12, "size": 1, "idx": 0},
-		"k28": {"n": "Container 28 t", "d": "Größe S", "price": 6000, "rank": 0, "mass": 5.0, "cap": 28, "size": 1, "idx": 1},
-		"k60": {"n": "Doppelcontainer 60 t", "d": "Größe M, braucht Lastesel oder Kondor", "price": 18000, "rank": 1, "mass": 9.0, "cap": 60, "size": 2, "idx": 2},
-		"k120": {"n": "Schwerlastrahmen 120 t", "d": "Größe L, nur Kondor", "price": 45000, "rank": 3, "mass": 15.0, "cap": 120, "size": 3, "idx": 3},
+		"k12": {"n": "Frachtkorb 12 t", "d": "Klein, passt überall", "price": 0, "rank": 0, "tier": 0, "mass": 3.0, "cap": 12, "size": 1, "idx": 0},
+		"k28": {"n": "Container 28 t", "d": "Größe S", "price": 6000, "rank": 0, "tier": 1, "mass": 5.0, "cap": 28, "size": 1, "idx": 1},
+		"k60": {"n": "Doppelcontainer 60 t", "d": "Größe M, braucht Lastesel oder Kondor", "price": 18000, "rank": 1, "tier": 2, "mass": 9.0, "cap": 60, "size": 2, "idx": 2},
+		"k120": {"n": "Schwerlastrahmen 120 t", "d": "Größe L, nur Kondor", "price": 45000, "rank": 3, "tier": 3, "mass": 15.0, "cap": 120, "size": 3, "idx": 3},
 	},
 	"armor": {
-		"a0": {"n": "Keine Panzerung", "d": "Leicht, aber ungeschützt", "price": 0, "rank": 0, "mass": 0.0, "hp": 0, "dmg": 1.0, "t": 0},
-		"a1": {"n": "Leichtplatten", "d": "Etwas Schutz gegen Kratzer", "price": 4000, "rank": 0, "mass": 3.0, "hp": 40, "dmg": 0.85, "t": 1},
-		"a2": {"n": "Verbundpanzer", "d": "Steckt Asteroiden weg", "price": 15000, "rank": 1, "mass": 7.0, "hp": 90, "dmg": 0.7, "t": 2},
-		"a3": {"n": "Titan-Keramik", "d": "Fast unzerstörbar, aber schwer", "price": 40000, "rank": 3, "mass": 12.0, "hp": 160, "dmg": 0.55, "t": 3},
+		"a0": {"n": "Keine Panzerung", "d": "Leicht, aber ungeschützt", "price": 0, "rank": 0, "tier": 0, "mass": 0.0, "hp": 0, "dmg": 1.0, "t": 0},
+		"a1": {"n": "Leichtplatten", "d": "Etwas Schutz gegen Kratzer", "price": 4000, "rank": 0, "tier": 1, "mass": 3.0, "hp": 40, "dmg": 0.85, "t": 1},
+		"a2": {"n": "Verbundpanzer", "d": "Steckt Asteroiden weg", "price": 15000, "rank": 1, "tier": 2, "mass": 7.0, "hp": 90, "dmg": 0.7, "t": 2},
+		"a3": {"n": "Titan-Keramik", "d": "Fast unzerstörbar, aber schwer", "price": 40000, "rank": 3, "tier": 3, "mass": 12.0, "hp": 160, "dmg": 0.55, "t": 3},
 	},
 	"extra": {
-		"x0": {"n": "Kein Extra", "d": "", "price": 0, "rank": 0, "mass": 0.0},
-		"nav": {"n": "Navigationsrechner", "d": "+25 % Zeit für den Pünktlichkeitsbonus", "price": 5000, "rank": 0, "mass": 0.5},
-		"bake": {"n": "Bergungsbake", "d": "−75 % Kosten bei Totalverlust", "price": 6000, "rank": 0, "mass": 0.5},
-		"daempfer": {"n": "Ladungsdämpfer", "d": "−60 % Schaden an der Ladung", "price": 8000, "rank": 1, "mass": 1.0},
+		"x0": {"n": "Kein Extra", "d": "", "price": 0, "rank": 0, "tier": 0, "mass": 0.0},
+		"nav": {"n": "Navigationsrechner", "d": "+25 % Zeit für den Pünktlichkeitsbonus", "price": 5000, "rank": 0, "tier": 1, "mass": 0.5},
+		"bake": {"n": "Bergungsbake", "d": "Wrack bleibt vor Plünderern geschützt", "price": 6000, "rank": 0, "tier": 1, "mass": 0.5},
+		"daempfer": {"n": "Ladungsdämpfer", "d": "−60 % Schaden an der Ladung", "price": 8000, "rank": 1, "tier": 2, "mass": 1.0},
+		"reaktor": {"n": "Zusatzreaktor", "d": "+60 % Waffenenergie und schnelleres Aufladen", "price": 16000, "rank": 1, "tier": 2, "mass": 2.0},
 	},
 }
 
@@ -78,7 +96,10 @@ const CARGO := [
 	{"n": "Diplomatenpost", "m": [1, 3], "p": 4.5, "express": true, "r": 1},
 	{"n": "Nickel-Eisen-Erz", "m": [50, 115], "p": 0.9, "from": "mine", "r": 2},
 	{"n": "Kolonie-Module", "m": [70, 120], "p": 1.3, "r": 3},
-	{"n": "Antimaterie-Kanister", "m": [3, 9], "p": 6.0, "fragile": true, "express": true, "r": 4}]
+	{"n": "Antimaterie-Kanister", "m": [3, 9], "p": 6.0, "fragile": true, "express": true, "r": 4},
+	{"n": "Schmuggelware", "m": [2, 10], "p": 5.0, "from": "freeport", "r": 1}]
+
+const PIRATE_NAMES := ["Rotzahn", "Kaltblut", "die Elster", "Grauwolf", "Narbe", "Schakal", "Viper", "Brandt", "Morgana", "der Geier"]
 
 var s: Dictionary = {}
 
@@ -87,12 +108,14 @@ func _ready() -> void:
 
 func default_save() -> Dictionary:
 	return {
-		"credits": 1500, "hull": 100.0, "deliveries": 0, "station": 0, "invert_y": false, "intro_seen": false,
-		"xp": 0, "streak": 0, "best": 0, "name": "Möwe",
-		"fit": {"frame": "spatz", "engine": "funke", "rcs": "rcs1", "cargo": "k12", "armor": "a0", "extra": "x0"},
-		"owned": {"frame": ["spatz"], "engine": ["funke"], "rcs": ["rcs1"], "cargo": ["k12"], "armor": ["a0"], "extra": ["x0"]},
+		"credits": 1500, "hull": 100.0, "deliveries": 0, "system": "sol7", "station": "kepler", "invert_y": false, "intro_seen": false,
+		"xp": 0, "streak": 0, "best": 0, "kills": 0, "name": "Möwe",
+		"fit": BASE_FIT.duplicate(),
+		"owned": {"frame": ["spatz"], "engine": ["funke"], "rcs": ["rcs1"], "weapon": ["puls1"], "shield": ["s0"], "cargo": ["k12"], "armor": ["a0"], "extra": ["x0"]},
 		"paint": {"hull": "#c9c2b2", "accent": "#ffb547", "pattern": "band", "flame": "auto"},
 		"patterns": ["uni", "band"],
+		"wreck": {},
+		"job": {},
 	}
 
 func load_game() -> void:
@@ -104,9 +127,15 @@ func load_game() -> void:
 			if data is Dictionary:
 				for k in data.keys():
 					s[k] = data[k]
-	# Typen und Gültigkeit reparieren
-	s.credits = int(s.credits); s.xp = int(s.xp); s.streak = int(s.streak); s.best = int(s.best)
-	s.deliveries = int(s.deliveries); s.station = int(s.station); s.hull = clampf(float(s.hull), 1.0, 100.0)
+	s.credits = int(s.credits); s.xp = int(s.xp); s.streak = int(s.streak); s.best = int(s.best); s.kills = int(s.kills)
+	s.deliveries = int(s.deliveries); s.hull = clampf(float(s.hull), 1.0, 100.0)
+	# Alte Spielstände (Station als Zahl) übernehmen
+	if not (s.station is String):
+		s.station = ["kepler", "vesta", "halden"][clampi(int(s.station), 0, 2)]
+		s.system = "sol7"
+	if Universe.station(s.station).is_empty():
+		s.station = "kepler"; s.system = "sol7"
+	s.system = Universe.station(s.station).sys
 	var d := default_save()
 	for slot in SLOTS:
 		var k: String = slot[0]
@@ -116,9 +145,15 @@ func load_game() -> void:
 			s.owned[k] = d.owned[k]
 		if not s.owned[k].has(s.fit[k]):
 			s.owned[k].append(s.fit[k])
+		if not s.owned[k].has(BASE_FIT[k]):
+			s.owned[k].append(BASE_FIT[k])
 	for k in d.paint.keys():
 		if not s.paint.has(k):
 			s.paint[k] = d.paint[k]
+	if not (s.wreck is Dictionary):
+		s.wreck = {}
+	if not (s.job is Dictionary):
+		s.job = {}
 
 func save_game() -> void:
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
@@ -155,14 +190,19 @@ func stats(fit: Dictionary) -> Dictionary:
 	var c := part("cargo", fit.cargo)
 	var a := part("armor", fit.armor)
 	var x := part("extra", fit.extra)
+	var w := part("weapon", fit.weapon)
+	var sh := part("shield", fit.shield)
+	var reactor: bool = fit.extra == "reaktor"
 	return {
-		"dry": float(f.mass) + float(e.mass) + float(r.mass) + float(c.mass) + float(a.mass) + float(x.mass),
+		"dry": float(f.mass) + float(e.mass) + float(r.mass) + float(c.mass) + float(a.mass) + float(x.mass) + float(w.mass) + float(sh.mass),
 		"thrust": float(e.thrust), "vmax": float(e.vmax), "turn": float(f.turn) * float(r.turn), "strafe": float(r.strafe),
 		"cap": int(c.cap), "hp_max": float(f.hp) + float(a.hp), "dmg": float(a.dmg),
 		"fragile": 0.4 if fit.extra == "daempfer" else 1.0,
 		"time": 1.25 if fit.extra == "nav" else 1.0,
-		"salvage": 0.25 if fit.extra == "bake" else 1.0,
 		"dim": f.dim,
+		"shield": float(sh.cap), "shield_regen": float(sh.regen),
+		"energy": 160.0 if reactor else 100.0, "energy_regen": 40.0 if reactor else 26.0,
+		"dps": float(w.dmg) * float(w.rate) * 2.0,
 	}
 
 ## Passt das Frachtmodul an den Rumpf an (größtes passendes aus dem Lager).
@@ -203,3 +243,6 @@ func fmt(n: float) -> String:
 func mmss(sec: float) -> String:
 	var t := int(max(sec, 0.0))
 	return "%d:%02d" % [t / 60, t % 60]
+
+func dist_txt(d: float) -> String:
+	return ("%.1f km" % (d / 1000.0)) if d >= 1000.0 else ("%d m" % roundi(d))

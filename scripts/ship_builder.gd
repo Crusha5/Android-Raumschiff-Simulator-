@@ -252,6 +252,39 @@ static func build(fit: Dictionary, paint: Dictionary) -> Node3D:
 					gy.cyl(0.22, 0.22, -0.45, 0.45, 10, Transform3D(Basis(Vector3.RIGHT, PI / 2), Vector3(sx * mw * 0.42, -h * 0.5 - 0.3, mz + sz * ml * 0.4)))
 			gy.to_node(root, std(Color(0.95, 0.76, 0.19), 0.3, 0.45))
 
+	# Waffen: zwei Läufe vorne an den Flanken, Mündung leuchtet in Waffenfarbe
+	var W := Game.part("weapon", fit.get("weapon", "puls1"))
+	var wcol := Color.html(W.color)
+	var wsz := float(W.size)
+	var gm := Geo.new()
+	var guns := []
+	var gx := w * 0.5 + 0.35
+	var gy := -h * 0.12
+	var gz := front + l * 0.18
+	if style == 2:
+		gx = w * 0.5 + w * 0.95 * 0.55
+		gy = -h * 0.12
+		gz = bz - l * 0.02
+	for sx in [-1.0, 1.0]:
+		var blen := 1.4 + wsz * 0.9
+		var xf := Geo.at(sx * gx, gy, gz)
+		gt.box(Vector3(0.5 + wsz * 0.15, 0.5 + wsz * 0.12, 1.4), 0.08, Geo.at(sx * gx, gy, gz + 0.5))
+		ge.cyl(0.14 * (0.8 + wsz * 0.3), 0.12 * (0.8 + wsz * 0.3), -blen, 0.0, 10, xf)
+		if wsz > 1.5:
+			gt.cyl(0.32, 0.32, -blen * 0.55, -blen * 0.25, 10, xf, true)
+		gm.cyl(0.16 * (0.8 + wsz * 0.3), 0.16 * (0.8 + wsz * 0.3), -blen - 0.06, -blen + 0.06, 10, xf, true)
+		guns.append(Vector3(sx * gx, gy, gz - blen - 0.3))
+	gm.to_node(root, emissive(wcol, 4.0), false)
+	# Schildemitter oben hinten
+	var SH := Game.part("shield", fit.get("shield", "s0"))
+	var st := int(SH.tier)
+	var scol: Color = [Color(0.4, 0.7, 1.0), Color(0.45, 1.0, 0.8), Color(0.8, 0.55, 1.0), Color(1.0, 0.8, 0.4)][st]
+	var gsh := Geo.new()
+	gt.cyl(0.5 + st * 0.12, 0.6 + st * 0.12, 0.0, 0.35, 12, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(0, h * 0.5, rear - l * 0.22)))
+	gsh.sphere(0.42 + st * 0.12, 12, 6, Geo.at(0, h * 0.5 + 0.35, rear - l * 0.22), PI / 2)
+	gsh.to_node(root, emissive(scol, 3.0), false)
+	root.set_meta("guns", guns)
+
 	var half := Vector3(w * 0.5, h * 0.5, l * 0.5)
 	gh.to_node(root, hull_mat(hc, ac, Game.pattern_code(paint.pattern), half, 0.7, 0.15, 0.5))
 	ga.to_node(root, hull_mat(ac, ac, 0, half, 0.6, 0.15, 0.45, 0.5))

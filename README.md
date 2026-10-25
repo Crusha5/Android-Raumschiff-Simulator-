@@ -2,7 +2,14 @@
 
 3D-Raumfrachter-Simulator für Android, gebaut mit Godot 4.7.
 
-Du fliegst einen kleinen Frachter im System Sol-7, nimmst an Stationen Aufträge an, dockst an der Zielstation an und kassierst den Lohn. In der Werft tauschst du Rumpf, Triebwerk, Düsen, Frachtmodul, Panzerung und Extras. Jedes Teil ist am Schiff sichtbar und ändert das Flugverhalten. In der Lackiererei wählst du Farben, Muster und Triebwerksfarbe. Ränge schalten neue Teile und Aufträge frei, Lieferungen ohne Kratzer erhöhen den Serienbonus.
+Inspiriert von Freelancer: Du läufst in Ego-Sicht über Stationsdecks und durch dein eigenes Schiff, nimmst Fracht- und Kopfgeldaufträge an, fliegst durch drei Sternsysteme und kämpfst gegen Piraten.
+
+- **Universum:** Sol-7 (sicher), Vega-Tiefe (Industrie), Nyx-Grenze (gesetzlos) – verbunden durch Sprungtore, innerhalb der Systeme Handelsrouten-Ringe.
+- **Laufen:** Stationsdeck mit Auftraggeberin, Ausrüster, Lackiererin und Bar; begehbares Schiff mit Cockpit, Konsolen pro Bauteil-Slot, Laderaum und Maschinenraum.
+- **Schiffsbau:** 8 Slots (Rumpf, Triebwerk, Düsen, Waffen, Schild, Fracht, Panzer, Extra). Jedes Teil ist am Schiff sichtbar und ändert das Flugverhalten. Werften haben unterschiedliche Ausstattungsstufen.
+- **Kampf:** Zielhilfe wie in Freelancer, Energie, Schilde, KI-Piraten (Angriff, Ausweichen, Flucht), Kopfgeldjagd, Explosionen.
+- **Zerstörung:** Respawn im Basisschiff an der letzten Station; die eingebauten Teile treiben im Wrack und können geborgen werden – Plünderer inklusive.
+- **Fortschritt:** Ränge, Lieferserie, gesperrte Aufträge und Teile als Ziele.
 
 ## APK bekommen
 
@@ -18,12 +25,16 @@ Ohne Secrets wird bei jedem Lauf ein neuer Wegwerf-Schlüssel erzeugt.
 | Pfad | Inhalt |
 |---|---|
 | `scripts/game.gd` | Autoload: Bauteile, Ränge, Lacke, Fracht, Spielstand |
+| `scripts/universe.gd` | Sternenkarte: Systeme, Stationen, Tore, Routen, Gefahrenzonen |
+| `scripts/ship_state.gd`, `npc.gd` | Schiffszustand, Schaden, Vorhalt; KI für Piraten und Händler |
+| `scripts/combat.gd` | Geschosse, Treffer, Explosionen |
+| `scripts/interior.gd`, `walker.gd`, `walk_hud.gd` | begehbare Innenräume, Spielfigur, Lauf-Oberfläche |
 | `scripts/main.gd` | Spielablauf, Flugphysik, Andocken, Werft-Aktionen, Kamera |
 | `scripts/ship_builder.gd` | baut das Schiff aus den eingebauten Teilen |
 | `scripts/space_world.gd` | Himmel, Sonne, Planet, Mond, Stationen, Asteroiden, Staub |
 | `scripts/hangar.gd` | Werfthalle mit Drehteller |
 | `scripts/hud.gd` | Flug-HUD und Touch-Steuerung |
-| `scripts/station_ui.gd` | Stationsmenü: Fracht, Werft, Lackiererei |
+| `scripts/station_ui.gd` | Gesprächsfenster: Aufträge, Bar, Ausrüster, Lackiererei, Schiffskonsole |
 | `scripts/geo.gd` | Geometrie-Baukasten (gefaste Kästen, Zylinder, Tori) |
 | `shaders/` | Rumpflack, Himmel, Planet, Atmosphäre, Triebwerk, Staub, Hallenboden |
 | `tests/autotest.tscn` | automatischer Rundgang mit Screenshots |
