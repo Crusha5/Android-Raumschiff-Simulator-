@@ -108,7 +108,7 @@ func _ready() -> void:
 
 func default_save() -> Dictionary:
 	return {
-		"credits": 1500, "hull": 100.0, "deliveries": 0, "system": "sol7", "station": "kepler", "invert_y": false, "intro_seen": false,
+		"credits": 3000, "hull": 100.0, "deliveries": 0, "system": "sol7", "station": "kepler", "invert_y": false, "intro_seen": false,
 		"xp": 0, "streak": 0, "best": 0, "kills": 0, "name": "Möwe",
 		"fit": BASE_FIT.duplicate(),
 		"owned": {"frame": ["spatz"], "engine": ["funke"], "rcs": ["rcs1"], "weapon": ["puls1"], "shield": ["s0"], "cargo": ["k12"], "armor": ["a0"], "extra": ["x0"]},
@@ -116,6 +116,7 @@ func default_save() -> Dictionary:
 		"patterns": ["uni", "band"],
 		"wreck": {},
 		"job": {},
+		"tune": {},
 	}
 
 func load_game() -> void:
@@ -154,6 +155,8 @@ func load_game() -> void:
 		s.wreck = {}
 	if not (s.job is Dictionary):
 		s.job = {}
+	if not s.has("tune") or not (s.tune is Dictionary):
+		s.tune = {}
 
 func save_game() -> void:
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
@@ -183,7 +186,7 @@ func rank_name(i: int) -> String:
 func streak_mult() -> float:
 	return 1.0 + min(int(s.streak), 10) * 0.05
 
-func stats(fit: Dictionary) -> Dictionary:
+func stats(fit: Dictionary, tune: Dictionary = {}) -> Dictionary:
 	var f := part("frame", fit.frame)
 	var e := part("engine", fit.engine)
 	var r := part("rcs", fit.rcs)
@@ -193,17 +196,40 @@ func stats(fit: Dictionary) -> Dictionary:
 	var w := part("weapon", fit.weapon)
 	var sh := part("shield", fit.shield)
 	var reactor: bool = fit.extra == "reaktor"
+	var tl := func(id: String) -> int: return int(tune.get(id, 0))
 	return {
 		"dry": float(f.mass) + float(e.mass) + float(r.mass) + float(c.mass) + float(a.mass) + float(x.mass) + float(w.mass) + float(sh.mass),
-		"thrust": float(e.thrust), "vmax": float(e.vmax), "turn": float(f.turn) * float(r.turn), "strafe": float(r.strafe),
-		"cap": int(c.cap), "hp_max": float(f.hp) + float(a.hp), "dmg": float(a.dmg),
+		"thrust": float(e.thrust) * (1.0 + 0.06 * tl.call(fit.engine)), "vmax": float(e.vmax) * (1.0 + 0.04 * tl.call(fit.engine)),
+		"turn": float(f.turn) * float(r.turn) * (1.0 + 0.05 * tl.call(fit.rcs)), "strafe": float(r.strafe),
+		"cap": roundi(float(c.cap) * (1.0 + 0.1 * tl.call(fit.cargo))),
+		"hp_max": float(f.hp) * (1.0 + 0.08 * tl.call(fit.frame)) + float(a.hp) * (1.0 + 0.1 * tl.call(fit.armor)), "dmg": float(a.dmg),
 		"fragile": 0.4 if fit.extra == "daempfer" else 1.0,
 		"time": 1.25 if fit.extra == "nav" else 1.0,
 		"dim": f.dim,
-		"shield": float(sh.cap), "shield_regen": float(sh.regen),
+		"shield": float(sh.cap) * (1.0 + 0.08 * tl.call(fit.shield)), "shield_regen": float(sh.regen) * (1.0 + 0.06 * tl.call(fit.shield)),
 		"energy": 160.0 if reactor else 100.0, "energy_regen": 40.0 if reactor else 26.0,
-		"dps": float(w.dmg) * float(w.rate) * 2.0,
+		"wdmg_mult": 1.0 + 0.07 * tl.call(fit.weapon),
+		"dps": float(w.dmg) * float(w.rate) * 2.0 * (1.0 + 0.07 * tl.call(fit.weapon)),
 	}
+
+const TUNE_MAX := 5
+const TUNE_TEXT := {"frame": "+8 % Hülle", "engine": "+6 % Schub, +4 % Spitze", "rcs": "+5 % Wendigkeit", "weapon": "+7 % Schaden",
+	"shield": "+8 % Kapazität, +6 % Aufladung", "cargo": "+10 % Frachtraum", "armor": "+10 % Panzerung"}
+
+func tunable(slot: String, id: String) -> bool:
+	if not TUNE_TEXT.has(slot):
+		return false
+	if slot == "armor" and id == "a0":
+		return false
+	return true
+
+func tune_level(id: String) -> int:
+	return int(s.tune.get(id, 0))
+
+func tune_cost(slot: String, id: String) -> int:
+	var lvl := tune_level(id)
+	var base := maxf(300.0, float(part(slot, id).price) * 0.12)
+	return roundi(base * pow(float(lvl + 1), 1.5) / 50.0) * 50
 
 ## Passt das Frachtmodul an den Rumpf an (größtes passendes aus dem Lager).
 func fix_cargo(fit: Dictionary) -> Dictionary:

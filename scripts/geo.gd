@@ -5,6 +5,7 @@ extends RefCounted
 
 var st := SurfaceTool.new()
 var count := 0
+var col := Color(1, 1, 1)   # Vertexfarbe für Figuren (ein Material, viele Farben)
 
 func _init() -> void:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -23,6 +24,7 @@ func tri(a: Vector3, b: Vector3, c: Vector3, na: Vector3, nb: Vector3, nc: Vecto
 	if cr.dot(na + nb + nc) > 0.0:
 		var t := b; b = c; c = t
 		var tn := nb; nb = nc; nc = tn
+	st.set_color(col)
 	st.set_normal(na); st.set_uv(_uv(a, na)); st.add_vertex(a)
 	st.set_normal(nb); st.set_uv(_uv(b, nb)); st.add_vertex(b)
 	st.set_normal(nc); st.set_uv(_uv(c, nc)); st.add_vertex(c)
@@ -151,11 +153,11 @@ func torus(big_r: float, small_r: float, seg_major: int, seg_minor: int, xf: Tra
 			tri(pts[0], pts[1], pts[2], nrm[0], nrm[1], nrm[2])
 			tri(pts[0], pts[2], pts[3], nrm[0], nrm[2], nrm[3])
 
-## Kugel (oder Kuppel, wenn max_lat < PI/2).
-func sphere(r: float, seg: int, rings: int, xf: Transform3D, max_lat := PI / 2) -> void:
+## Kugel bzw. Kugelzone zwischen min_lat und max_lat (Breitengrade, -PI/2 = unten).
+func sphere(r: float, seg: int, rings: int, xf: Transform3D, max_lat := PI / 2, min_lat := -PI / 2) -> void:
 	for i in rings:
-		var la0 := -PI / 2 + (max_lat + PI / 2) * i / rings
-		var la1 := -PI / 2 + (max_lat + PI / 2) * (i + 1) / rings
+		var la0 := min_lat + (max_lat - min_lat) * i / rings
+		var la1 := min_lat + (max_lat - min_lat) * (i + 1) / rings
 		for j in seg:
 			var lo0 := TAU * j / seg
 			var lo1 := TAU * (j + 1) / seg
@@ -166,9 +168,13 @@ func sphere(r: float, seg: int, rings: int, xf: Transform3D, max_lat := PI / 2) 
 			for k in 4:
 				p.append(xf * (n[k] * r))
 				wn.append((xf.basis * n[k]).normalized())
-			if i > 0:
+			if la0 <= -PI / 2 + 0.001:
+				tri(p[0], p[2], p[3], wn[0], wn[2], wn[3])
+			elif la1 >= PI / 2 - 0.001:
 				tri(p[0], p[1], p[2], wn[0], wn[1], wn[2])
-			tri(p[0], p[2], p[3], wn[0], wn[2], wn[3])
+			else:
+				tri(p[0], p[1], p[2], wn[0], wn[1], wn[2])
+				tri(p[0], p[2], p[3], wn[0], wn[2], wn[3])
 
 func commit() -> ArrayMesh:
 	if count == 0:

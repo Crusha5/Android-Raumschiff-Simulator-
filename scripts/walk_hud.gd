@@ -15,7 +15,7 @@ var _stick_idx := -1
 var _stick_origin := Vector2.ZERO
 var _look_idx := -1
 var _look_last := Vector2.ZERO
-var _mouse_look := false
+var _looked := false
 
 var loc_lbl: Label
 var sub_lbl: Label
@@ -120,6 +120,8 @@ func _input(event: InputEvent) -> void:
 			stick = d / STICK_R
 		elif e.index == _look_idx:
 			look += e.position - _look_last
+			if look.length() > 40.0:
+				_looked = true
 			_look_last = e.position
 	elif event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_E:
 		if act_btn.visible:
@@ -145,4 +147,5 @@ func _draw() -> void:
 		var hc := Vector2(90, size.y - 90)
 		draw_arc(hc, 55.0, 0, TAU, 48, Color(K.AMBER, 0.25), 1.5, true)
 		draw_string(K.F_SEMI, hc + Vector2(-25, 0), "GEHEN", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, K.MUTED)
-		draw_string(K.F_SEMI, Vector2(size.x * 0.62, size.y - 40), "RECHTS ZIEHEN: UMSEHEN", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(K.MUTED, 0.7))
+	if not _looked and not prompt.visible:
+		draw_string(K.F_SEMI, Vector2(size.x * 0.6, size.y - 40), "RECHTS ZIEHEN: UMSEHEN", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(K.MUTED, 0.7))

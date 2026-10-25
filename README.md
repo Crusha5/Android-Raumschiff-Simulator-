@@ -5,7 +5,8 @@
 Inspiriert von Freelancer: Du läufst in Ego-Sicht über Stationsdecks und durch dein eigenes Schiff, nimmst Fracht- und Kopfgeldaufträge an, fliegst durch drei Sternsysteme und kämpfst gegen Piraten.
 
 - **Universum:** Sol-7 (sicher), Vega-Tiefe (Industrie), Nyx-Grenze (gesetzlos) – verbunden durch Sprungtore, innerhalb der Systeme Handelsrouten-Ringe.
-- **Laufen:** Stationsdeck mit Auftraggeberin, Ausrüster, Lackiererin und Bar; begehbares Schiff mit Cockpit, Konsolen pro Bauteil-Slot, Laderaum und Maschinenraum.
+- **Laufen:** Station mit hoher Promenade, Galerie und Panoramafenster (mit dem Planeten des Systems), Bar und begehbarem Hangar, in dem das eigene Schiff in Originalgröße steht. Gegliederte Menschen mit Animation, Drohnen, Putz-, Lade-, Schweiß- und Servo-Roboter. Begehbares Schiff mit Cockpit, Konsolen pro Bauteil-Slot, Laderaum und Maschinenraum.
+- **Tuning:** Jedes Teil hat 5 Tuning-Stufen beim Ausrüster oder beim Mechanik-Roboter R-7.
 - **Schiffsbau:** 8 Slots (Rumpf, Triebwerk, Düsen, Waffen, Schild, Fracht, Panzer, Extra). Jedes Teil ist am Schiff sichtbar und ändert das Flugverhalten. Werften haben unterschiedliche Ausstattungsstufen.
 - **Kampf:** Zielhilfe wie in Freelancer, Energie, Schilde, KI-Piraten (Angriff, Ausweichen, Flucht), Kopfgeldjagd, Explosionen.
 - **Zerstörung:** Respawn im Basisschiff an der letzten Station; die eingebauten Teile treiben im Wrack und können geborgen werden – Plünderer inklusive.
@@ -29,6 +30,7 @@ Ohne Secrets wird bei jedem Lauf ein neuer Wegwerf-Schlüssel erzeugt.
 | `scripts/ship_state.gd`, `npc.gd` | Schiffszustand, Schaden, Vorhalt; KI für Piraten und Händler |
 | `scripts/combat.gd` | Geschosse, Treffer, Explosionen |
 | `scripts/interior.gd`, `walker.gd`, `walk_hud.gd` | begehbare Innenräume, Spielfigur, Lauf-Oberfläche |
+| `scripts/actor.gd` | Menschen und Roboter mit prozeduraler Animation |
 | `scripts/main.gd` | Spielablauf, Flugphysik, Andocken, Werft-Aktionen, Kamera |
 | `scripts/ship_builder.gd` | baut das Schiff aus den eingebauten Teilen |
 | `scripts/space_world.gd` | Himmel, Sonne, Planet, Mond, Stationen, Asteroiden, Staub |

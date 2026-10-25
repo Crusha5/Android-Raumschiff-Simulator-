@@ -34,17 +34,24 @@ func _ready() -> void:
 	main = load("res://scenes/main.tscn").instantiate()
 	add_child(main)
 	await wait(30)
-	await shot("00_deck")
-	check(main.state == "walk", "startet auf dem Stationsdeck")
-	# Zum Auftragsbrett drehen und laufen
-	main.walker.place(Transform3D(Basis(Vector3.UP, -PI / 2), Vector3(7.5, 0.1, -2.5)))
+	await shot("00_hangar_spawn")
+	check(main.state == "walk", "startet im Hangar der Station")
+	main.walker.place(Transform3D(Basis(Vector3.UP, 0.98), Vector3(-22, 0.1, 10)))
+	await wait(20)
+	await shot("01_hangar_view")
+	main.walker.place(Transform3D(Basis(Vector3.UP, -PI / 4), Vector3(-12, 0.1, 8)))
+	await wait(20)
+	await shot("02_promenade")
+	main.walker.place(Transform3D(Basis(Vector3.UP, PI * 0.8), Vector3(-6, 0.1, -9)))
 	await wait(10)
-	await shot("01_deck_board")
+	await shot("03_promenade_back")
+	main.walker.place(Transform3D(Basis.IDENTITY, Vector3(0, 0.1, 2.0)))
+	await wait(15)
 	main._walk_update(0.016)
+	await shot("04_mara")
 	check(main.action_kind == "jobs", "Auftraggeberin ansprechbar")
 	main._walk_interact()
 	await wait(10)
-	await shot("02_jobs")
 	var idx := -1
 	for i in main.offers.size():
 		if main.lock_reason(main.offers[i]) == "" and main.offers[i].dest_sys == "sol7":
@@ -55,41 +62,70 @@ func _ready() -> void:
 	main.take_offer(main.offers[idx])
 	check(not main.job.is_empty(), "Auftrag angenommen")
 	main.close_panel()
-	# Bar
-	main.walker.place(Transform3D(Basis.IDENTITY, Vector3(8.5, 0.1, -3.8)))
+	main.walker.place(Transform3D(Basis(Vector3.UP, -PI / 2), Vector3(22.5, 0.1, -1.0)))
+	await wait(15)
+	main._walk_update(0.016)
+	await shot("05_bar")
+	main.walker.place(Transform3D(Basis(Vector3.UP, PI * 0.9), Vector3(6, 0.1, 5.5)))
+	await wait(10)
+	await shot("06_shops")
+	main.walker.place(Transform3D(Basis(Vector3.UP, PI), Vector3(8.5, 0.1, 8.0)))
+	main.walker.pitch = -0.1
+	await wait(30)
+	await shot("06b_jonas_close")
+	main.walker.place(Transform3D(Basis(Vector3.UP, PI * 0.5), Vector3(28.5, 0.1, 4.0)))
+	await wait(20)
+	await shot("06c_bar_room")
+	main.walker.place(Transform3D(Basis(Vector3.UP, PI), Vector3(-24, 0.1, 12.4)))
+	await wait(10)
+	main._walk_update(0.016)
+	check(main.action_kind == "tune", "R-7 ansprechbar")
+	await shot("07_r7")
+	main._walk_interact()
+	await wait(10)
+	var before := int(Game.s.credits)
+	main.tune("engine")
+	check(Game.tune_level("funke") == 1 and int(Game.s.credits) < before, "Triebwerk getunt")
+	await wait(10)
+	await shot("08_tune")
+	main.close_panel()
+	# Zum Schiff und einsteigen
+	var board = null
+	for it in main.interior.interactables:
+		if it.action == "board":
+			board = it
+			break
+	main.walker.place(Transform3D(Basis.IDENTITY, board.pos + Vector3(0, -0.9, 1.0)))
 	await wait(5)
 	main._walk_update(0.016)
-	await shot("03_bar_view")
-	# Ausrüster
-	main.open_panel("shop", "Jonas Brack · Ausrüster", "Kepler-Dock", true, "weapon")
-	main.station_ui.slot = "weapon"
-	main.station_ui.refresh()
-	main.try_part("weapon", "puls2")
-	await wait(20)
-	await shot("04_shop")
-	main.close_panel()
+	check(main.action_kind == "board", "Einstieg am Schiff")
+	await shot("09_board")
+	if OS.get_environment("QUICK") == "1":
+		print("ERRORS ", errors)
+		get_tree().quit()
+		return
 	# An Bord
 	main.enter_ship()
 	await wait(20)
-	await shot("05_ship_interior")
+	await shot("10_ship_interior")
 	main.walker.place(Transform3D(Basis(Vector3.UP, 0.0), Vector3(0, 0.1, main.interior.spawn.origin.z + 1.0)))
 	await wait(10)
-	await shot("06_ship_corridor")
+	await shot("11_ship_corridor")
 	main.walker.place(Transform3D(Basis(Vector3.UP, PI), Vector3(0, 0.1, -2.0)))
 	await wait(10)
-	await shot("07_ship_rear")
+	await shot("11b_ship_rear")
 	main.open_panel("console", "Konsole · Waffen", "«Möwe»", true, "weapon")
 	await wait(10)
-	await shot("08_console")
+	await shot("12_console")
 	main.close_panel()
 	# Abdocken
 	main.undock()
 	await wait(60)
 	check(main.state == "flying", "abgedockt")
-	await shot("09_cockpit")
+	await shot("f09_cockpit")
 	main.toggle_cam()
 	await wait(30)
-	await shot("10_chase")
+	await shot("f10_chase")
 	# Kampf
 	main.spawn_pirates(2, 0, main.player.pos + main.player.forward() * 900.0)
 	await wait(5)
@@ -102,12 +138,12 @@ func _ready() -> void:
 		main.player.hp = main.player.S.hp_max
 		await get_tree().process_frame
 		if k == 60:
-			await shot("11_combat")
+			await shot("f11_combat")
 	main.hud.firing = false
 	var pir: int = main.npcs.filter(func(n): return n.faction == "pirate").size()
 	print("Piraten übrig: ", pir, " Abschüsse: ", Game.s.kills)
 	check(int(Game.s.kills) >= 1, "mindestens ein Abschuss")
-	await shot("12_after_combat")
+	await shot("f12_after_combat")
 	# Handelsroute
 	var ln: Dictionary = main.world.lanes[0]
 	main.player.pos = ln.p0 + Vector3(0, 50, 0)
@@ -117,7 +153,7 @@ func _ready() -> void:
 	check(main.action_kind == "lane", "Handelsroute erkannt")
 	main.do_action()
 	await wait(80)
-	await shot("13_lane")
+	await shot("f13_lane")
 	for k in 600:
 		if main.state != "lane":
 			break
@@ -129,24 +165,24 @@ func _ready() -> void:
 	look_at_point(g.pos)
 	main.player.vel = Vector3.ZERO
 	await wait(5)
-	await shot("14_gate")
+	await shot("f14_gate")
 	main._find_action()
 	check(main.action_kind == "jump", "Sprungtor erkannt")
 	main.do_action()
 	await wait(70)
-	await shot("15_hyperspace")
+	await shot("f15_hyperspace")
 	for k in 400:
 		if main.state == "flying":
 			break
 		await get_tree().process_frame
 	check(main.world.sys_id == "vega", "in Vega-Tiefe angekommen")
 	await wait(30)
-	await shot("16_vega")
+	await shot("f16_vega")
 	var orion: Dictionary = main.world.station_by_id("orion")
 	main.player.pos = orion.node.to_global(Vector3(300, 200, 1400))
 	look_at_point(orion.node.position)
 	await wait(30)
-	await shot("17_orion")
+	await shot("f17_orion")
 	# Zerstörung
 	Game.s.fit.weapon = "puls2"
 	Game.s.owned.weapon.append("puls2")
@@ -155,7 +191,7 @@ func _ready() -> void:
 	main.collide(Vector3.UP, 400.0)
 	await wait(10)
 	check(main.state == "dead", "Schiff zerstört")
-	await shot("18_explosion")
+	await shot("f18_explosion")
 	for k in 300:
 		if main.state == "walk":
 			break
@@ -163,7 +199,7 @@ func _ready() -> void:
 	check(main.state == "walk", "Respawn an Station")
 	check(not Game.s.wreck.is_empty(), "Wrack angelegt")
 	check(not Game.s.owned.weapon.has("puls2"), "Teil im Wrack")
-	await shot("19_respawn")
+	await shot("f19_respawn")
 	main.modal_layer.visible = false
 	# Zum Wrack fliegen und bergen
 	main.undock()
@@ -175,7 +211,7 @@ func _ready() -> void:
 		main.player.vel = Vector3.ZERO
 		look_at_point(main._v3(Game.s.wreck.pos))
 		await wait(10)
-		await shot("20_wreck")
+		await shot("f20_wreck")
 		main._find_action()
 		check(main.action_kind == "salvage", "Bergung möglich")
 		main.do_action()

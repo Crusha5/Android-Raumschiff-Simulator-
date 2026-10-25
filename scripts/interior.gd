@@ -1,15 +1,22 @@
 class_name Interior
 extends Node3D
-## Begehbare Innenräume: Stationsdeck (Händler, Bar, Hangarfenster) und Schiffsinneres (Konsolen, Pilotensitz).
+## Begehbare Innenräume.
+## Station: hohe Promenade mit Galerie und Panoramafenster, Bar, begehbarer Hangar mit dem eigenen Schiff.
+## Schiff: Cockpit, Gang mit Konsolen je Bauteil, Laderaum, Maschinenraum.
 
 const WINDOW_SHADER := preload("res://shaders/window.gdshader")
+const ROOM_SHADER := preload("res://shaders/interior.gdshader")
 
 var env: Environment
 var interactables: Array = []   # {pos, r, label, action, arg}
 var spawn := Transform3D.IDENTITY
-var people: Array = []
+var spawns := {}
+var actors: Array = []
+var doors: Array = []
+var spinners: Array = []
 var body: StaticBody3D
 var kind := ""
+var rng := RandomNumberGenerator.new()
 var _t := 0.0
 
 func _ready() -> void:
@@ -18,35 +25,93 @@ func _ready() -> void:
 	env.background_color = Color(0.01, 0.012, 0.02)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.55, 0.6, 0.72)
-	env.ambient_light_energy = 0.5
+	env.ambient_light_energy = 0.8
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_BG
 	env.tonemap_mode = Environment.TONE_MAPPER_AGX
+	env.tonemap_exposure = 1.05
 	env.glow_enabled = true
 	env.glow_intensity = 0.45
-	env.glow_hdr_threshold = 1.0
+	env.glow_hdr_threshold = 1.1
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
 	env.adjustment_enabled = true
-	env.adjustment_saturation = 1.1
+	env.adjustment_saturation = 1.12
+	env.adjustment_contrast = 1.06
 
 func clear() -> void:
 	for c in get_children():
 		c.queue_free()
 	interactables = []
-	people = []
+	actors = []
+	doors = []
+	spinners = []
+	spawns = {}
 	body = StaticBody3D.new()
 	add_child(body)
+
+# ------------------------------------------------------------------ Bausteine
+func collider(size: Vector3, pos: Vector3, rot_y := 0.0) -> void:
+	var cs := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = size
+	cs.shape = bs
+	cs.position = pos
+	cs.rotation.y = rot_y
+	body.add_child(cs)
 
 ## Fester Block: sichtbar (in Geo g) und begehbar (Kollision)
 func solid(g: Geo, size: Vector3, pos: Vector3, r := 0.04, collide := true) -> void:
 	g.box(size, r, Geo.at(pos.x, pos.y, pos.z))
 	if collide:
-		var cs := CollisionShape3D.new()
-		var bs := BoxShape3D.new()
-		bs.size = size
-		cs.shape = bs
-		cs.position = pos
-		body.add_child(cs)
+		collider(size, pos)
 
-func window(size: Vector2, xf: Transform3D, sys_id: String) -> void:
+## Raum aus Boden, Decke und Wänden mit Öffnungen. openings: [{side:"n|s|e|w", from, to, h, y0?}]
+func room(g: Geo, x0: float, x1: float, z0: float, z1: float, h: float, openings: Array, t := 0.4) -> void:
+	solid(g, Vector3(x1 - x0, 0.2, z1 - z0), Vector3((x0 + x1) / 2, -0.1, (z0 + z1) / 2), 0.0)
+	solid(g, Vector3(x1 - x0, 0.2, z1 - z0), Vector3((x0 + x1) / 2, h + 0.1, (z0 + z1) / 2), 0.0)
+	for side in ["n", "s", "e", "w"]:
+		var horiz: bool = side == "n" or side == "s"
+		var a0 := x0 if horiz else z0
+		var a1 := x1 if horiz else z1
+		var fixed: float = (z0 if side == "n" else z1) if horiz else (x1 if side == "e" else x0)
+		var fixed_o: float = fixed + (-t / 2 if side in ["n", "w"] else t / 2)
+		var ops := []
+		for o in openings:
+			if o.side == side:
+				ops.append(o)
+		ops.sort_custom(func(a, b): return a.from < b.from)
+		var cur := a0
+		for o in ops:
+			_wall_seg(g, horiz, cur, float(o.from), fixed_o, 0.0, h, t)
+			_wall_seg(g, horiz, float(o.from), float(o.to), fixed_o, float(o.h), h, t)
+			if o.has("y0") and float(o.y0) > 0.0:
+				_wall_seg(g, horiz, float(o.from), float(o.to), fixed_o, 0.0, float(o.y0), t)
+			cur = float(o.to)
+		_wall_seg(g, horiz, cur, a1, fixed_o, 0.0, h, t)
+
+func _wall_seg(g: Geo, horiz: bool, a: float, b: float, fixed: float, y0: float, y1: float, t: float) -> void:
+	if b - a < 0.01 or y1 - y0 < 0.01:
+		return
+	var c := (a + b) / 2
+	var y := (y0 + y1) / 2
+	if horiz:
+		solid(g, Vector3(b - a, y1 - y0, t), Vector3(c, y, fixed), 0.0)
+	else:
+		solid(g, Vector3(t, y1 - y0, b - a), Vector3(fixed, y, c), 0.0)
+
+func room_mat(wall: Color, accent: Color, floor_c := Color(0.2, 0.21, 0.24), ceil_c := Color(0.28, 0.29, 0.32), panel := 1.6, band := 2.65, glow := 1.0) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = ROOM_SHADER
+	m.set_shader_parameter("wall_col", wall)
+	m.set_shader_parameter("trim_col", wall.darkened(0.7))
+	m.set_shader_parameter("floor_col", floor_c)
+	m.set_shader_parameter("ceil_col", ceil_c)
+	m.set_shader_parameter("accent", accent)
+	m.set_shader_parameter("panel", panel)
+	m.set_shader_parameter("band_y", band)
+	m.set_shader_parameter("glow", glow)
+	return m
+
+func window(size: Vector2, xf: Transform3D, sys_id: String, from_pos := Vector3.ZERO) -> void:
 	var q := QuadMesh.new()
 	q.size = size
 	var mi := MeshInstance3D.new()
@@ -59,6 +124,20 @@ func window(size: Vector2, xf: Transform3D, sys_id: String) -> void:
 		m.set_shader_parameter("neb_b", sys.neb[1])
 		m.set_shader_parameter("neb_c", sys.neb[2])
 		m.set_shader_parameter("band_normal", sys.band)
+		var pd: Dictionary = sys.planet
+		var rel: Vector3 = (pd.pos as Vector3) - from_pos
+		# Planet in Blickrichtung des Fensters rücken, damit man ihn sieht
+		var look := -xf.basis.z.normalized()
+		var dir := rel.normalized().lerp(look, 0.75).normalized()
+		dir = (dir + Vector3(0.0, -0.12, 0.0)).normalized()
+		m.set_shader_parameter("planet_dir", dir)
+		m.set_shader_parameter("planet_ang", clampf(asin(clampf(float(pd.r) / rel.length(), 0.0, 0.9)) * 0.9, 0.12, 0.42))
+		m.set_shader_parameter("planet_kind", int(pd.kind))
+		for i in 4:
+			m.set_shader_parameter("p%d" % i, pd.c[i])
+		m.set_shader_parameter("atmo", pd.atmo)
+		m.set_shader_parameter("sun_dir", (sys.sun_dir as Vector3).normalized())
+		m.set_shader_parameter("sun_col", sys.sun_color)
 	mi.material_override = m
 	mi.transform = xf
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -78,230 +157,408 @@ func neon(text: String, pos: Vector3, rot_y: float, col: Color, size := 64) -> L
 	add_child(l)
 	return l
 
-func lamp(pos: Vector3, col: Color, energy: float, rng: float) -> void:
+func lamp(pos: Vector3, col: Color, energy: float, rng_m: float) -> OmniLight3D:
 	var o := OmniLight3D.new()
 	o.position = pos
 	o.light_color = col
 	o.light_energy = energy
-	o.omni_range = rng
+	o.omni_range = rng_m
+	o.omni_attenuation = 0.9
 	o.shadow_enabled = false
 	add_child(o)
+	return o
+
+func probe(center: Vector3, size: Vector3) -> void:
+	var p := ReflectionProbe.new()
+	p.position = center
+	p.size = size
+	p.box_projection = true
+	p.interior = true
+	p.update_mode = ReflectionProbe.UPDATE_ONCE
+	p.intensity = 0.8
+	p.ambient_mode = ReflectionProbe.AMBIENT_COLOR
+	p.ambient_color = Color(0.3, 0.32, 0.38)
+	p.ambient_color_energy = 0.3
+	add_child(p)
 
 func add_interact(pos: Vector3, r: float, label: String, action: String, arg := "") -> void:
 	interactables.append({"pos": pos, "r": r, "label": label, "action": action, "arg": arg})
 
-# ------------------------------------------------------------------ Figuren
-func person(pos: Vector3, rot_y: float, body_col: Color, accent: Color, title: String, pname: String, wander := false) -> Node3D:
+func add_actor(a: Actor, pos: Vector3, rot_y := 0.0, mode := "idle") -> Actor:
+	a.node.position = pos
+	a.node.rotation.y = rot_y
+	a.base_rot = rot_y
+	a.mode = mode
+	a.home = pos
+	a.target = pos
+	add_child(a.node)
+	actors.append(a)
+	return a
+
+func label3d(a: Actor, title: String, pname: String) -> void:
+	var l := Label3D.new()
+	l.text = title + "\n" + pname
+	l.font = UIKit.F_SEMI
+	l.font_size = 34
+	l.pixel_size = 0.004
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.modulate = Color(1.15, 1.08, 0.92)
+	l.outline_size = 8
+	l.outline_modulate = Color(0, 0, 0, 0.85)
+	l.position = Vector3(0, 2.15, 0)
+	a.node.add_child(l)
+
+func door(pos: Vector3, width: float, h: float, along_z: bool, col: Color) -> void:
 	var n := Node3D.new()
 	n.position = pos
-	n.rotation.y = rot_y
 	add_child(n)
-	var gb := Geo.new()
-	var ga := Geo.new()
-	var gs := Geo.new()
+	var panels := []
 	for sx in [-1.0, 1.0]:
-		gb.box(Vector3(0.17, 0.85, 0.2), 0.05, Geo.at(sx * 0.12, 0.43, 0))
-		gb.box(Vector3(0.12, 0.62, 0.13), 0.04, Transform3D(Basis(Vector3.FORWARD, sx * 0.12), Vector3(sx * 0.33, 1.15, 0)))
-	gb.frustum(Vector2(0.46, 0.26), Vector2(0.38, 0.22), 0.65, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(0, 1.2, 0)))
-	ga.box(Vector3(0.48, 0.08, 0.28), 0.03, Geo.at(0, 1.0, 0))
-	ga.box(Vector3(0.1, 0.4, 0.02), 0.01, Geo.at(0.12, 1.28, -0.12))
-	gs.sphere(0.15, 14, 8, Geo.at(0, 1.68, 0))
-	gs.box(Vector3(0.1, 0.12, 0.1), 0.02, Geo.at(0, 1.55, 0))
-	var gv := Geo.new()
-	gv.box(Vector3(0.24, 0.07, 0.04), 0.02, Geo.at(0, 1.7, -0.13))
-	gb.to_node(n, ShipBuilder.std(body_col, 0.2, 0.7))
-	ga.to_node(n, ShipBuilder.std(accent, 0.3, 0.5))
-	gs.to_node(n, ShipBuilder.std(Color(0.78, 0.62, 0.52), 0.0, 0.7))
-	gv.to_node(n, ShipBuilder.emissive(accent.lightened(0.3), 2.5), false)
-	if title != "":
-		var l := Label3D.new()
-		l.text = title + "\n" + pname if pname != "" else title
-		l.font = UIKit.F_SEMI
-		l.font_size = 40
-		l.pixel_size = 0.004
-		l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		l.modulate = Color(1.2, 1.1, 0.9)
-		l.outline_size = 8
-		l.outline_modulate = Color(0, 0, 0, 0.8)
-		l.position = Vector3(0, 2.1, 0)
-		l.no_depth_test = false
-		n.add_child(l)
-	people.append({"node": n, "base_rot": rot_y, "phase": randf() * TAU, "wander": wander, "home": pos, "target": pos, "wait": randf() * 3.0})
-	return n
+		var p := Node3D.new()
+		n.add_child(p)
+		var g := Geo.new()
+		var sz := Vector3(0.12, h, width / 2) if along_z else Vector3(width / 2, h, 0.12)
+		g.box(sz, 0.03, Geo.at(0, h / 2, 0))
+		var ge := Geo.new()
+		var sl := Vector3(0.14, 0.06, width / 2 * 0.8) if along_z else Vector3(width / 2 * 0.8, 0.06, 0.14)
+		ge.box(sl, 0.01, Geo.at(0, h * 0.55, 0))
+		g.to_node(p, ShipBuilder.std(Color(0.32, 0.34, 0.38), 0.6, 0.35))
+		ge.to_node(p, ShipBuilder.emissive(col, 2.0), false)
+		var closed := Vector3(0, 0, sx * width / 4) if along_z else Vector3(sx * width / 4, 0, 0)
+		var opened := Vector3(0, 0, sx * width * 0.75) if along_z else Vector3(sx * width * 0.75, 0, 0)
+		p.position = closed
+		panels.append({"node": p, "closed": closed, "open": opened})
+	doors.append({"pos": pos, "panels": panels, "k": 0.0})
+
+func tree(g_trunk: Geo, g_leaf: Geo, p: Vector3, h: float) -> void:
+	g_trunk.cyl(0.08, 0.12, 0.0, h, 8, Transform3D(Basis(Vector3.RIGHT, -PI / 2), p))
+	for k in 4:
+		var a := TAU * k / 4.0 + 0.4
+		g_leaf.sphere(0.55 + 0.15 * (k % 2), 10, 6, Geo.at(p.x + cos(a) * 0.35, p.y + h + 0.1 * k, p.z + sin(a) * 0.35))
+	g_leaf.sphere(0.6, 10, 6, Geo.at(p.x, p.y + h + 0.45, p.z))
+
+func planter(g: Geo, gt: Geo, gl: Geo, p: Vector3) -> void:
+	solid(g, Vector3(1.4, 0.6, 1.4), p + Vector3(0, 0.3, 0), 0.12)
+	tree(gt, gl, p + Vector3(0, 0.6, 0), 1.6)
+
+func bench(g: Geo, p: Vector3, along_x: bool) -> void:
+	var sz := Vector3(2.6, 0.12, 0.6) if along_x else Vector3(0.6, 0.12, 2.6)
+	solid(g, sz, p + Vector3(0, 0.45, 0), 0.04)
+	for k in [-1.0, 1.0]:
+		var o := Vector3(k * 1.0, 0, 0) if along_x else Vector3(0, 0, k * 1.0)
+		g.box(Vector3(0.12, 0.45, 0.5) if along_x else Vector3(0.5, 0.45, 0.12), 0.02, Geo.at(p.x + o.x, 0.22, p.z + o.z))
 
 func update(dt: float, player_pos: Vector3) -> void:
 	_t += dt
-	for p in people:
-		var n: Node3D = p.node
-		if p.wander:
-			var to: Vector3 = p.target - n.position
-			to.y = 0.0
-			if to.length() < 0.3:
-				p.wait -= dt
-				if p.wait <= 0.0:
-					p.target = p.home + Vector3(randf_range(-6, 6), 0, randf_range(-4, 4))
-					p.wait = randf_range(2.0, 6.0)
-			else:
-				n.position += to.normalized() * dt * 1.1
-				n.rotation.y = lerp_angle(n.rotation.y, atan2(-to.x, -to.z), dt * 4.0)
-				n.position.y = absf(sin(_t * 7.0 + p.phase)) * 0.04
-		else:
-			var d := player_pos - n.position
-			d.y = 0.0
-			var target_rot: float = p.base_rot
-			if d.length() < 4.0:
-				target_rot = atan2(-d.x, -d.z)
-			n.rotation.y = lerp_angle(n.rotation.y, target_rot, dt * 3.0)
-			n.position.y = sin(_t * 1.6 + p.phase) * 0.01
+	for a in actors:
+		a.update(dt, player_pos)
+	for d in doors:
+		var near: bool = player_pos.distance_to(d.pos) < 3.6
+		d.k = move_toward(d.k, 1.0 if near else 0.0, dt * 2.5)
+		for p in d.panels:
+			p.node.position = (p.closed as Vector3).lerp(p.open, d.k)
+	for s in spinners:
+		s.node.rotate_y(dt * float(s.speed))
 
-# ------------------------------------------------------------------ Stationsdeck
+func _people_cfg(r: RandomNumberGenerator) -> Dictionary:
+	var tops := [Color(0.22, 0.27, 0.35), Color(0.35, 0.18, 0.16), Color(0.2, 0.3, 0.24), Color(0.4, 0.36, 0.3), Color(0.14, 0.14, 0.16), Color(0.5, 0.45, 0.2), Color(0.25, 0.2, 0.35)]
+	var pants := [Color(0.12, 0.13, 0.16), Color(0.25, 0.22, 0.18), Color(0.18, 0.2, 0.25), Color(0.3, 0.3, 0.32)]
+	return {"top": tops[r.randi() % tops.size()], "pants": pants[r.randi() % pants.size()],
+		"accent": [Color(1, 0.71, 0.28), Color(0.62, 0.83, 1.0), Color(0.5, 0.9, 0.55), Color(1, 0.45, 0.6)][r.randi() % 4],
+		"pads": r.randf() < 0.3, "cap": r.randf() < 0.2}
+
+# ------------------------------------------------------------------ Station
 func build_station(st: Dictionary, ship_fit: Dictionary, ship_paint: Dictionary, has_job: bool) -> void:
 	clear()
 	kind = "station"
+	rng.seed = hash(st.id)
 	var accent: Color = st.accent
 	var free: bool = st.kind == "freeport"
-	var wall_c := Color(0.2, 0.2, 0.23) if free else Color(0.62, 0.64, 0.68)
-	var gf := Geo.new()   # Boden
-	var gw := Geo.new()   # Wände
-	var gt := Geo.new()   # Theken, Möbel
+	var wall_c := Color(0.24, 0.23, 0.27) if free else Color(0.66, 0.68, 0.72)
+	var spos: Vector3 = st.pos
+	var H := 8.0
+	var gr := Geo.new()   # Räume (Raumshader)
+	var gt := Geo.new()   # Möbel dunkel
+	var gm := Geo.new()   # Metall hell
 	var gl := Geo.new()   # Lichtbänder
-	var ga := Geo.new()   # Akzent
-	var gp := Geo.new()   # Pflanzen
-	var H := 4.4
-	# Boden, Decke
-	solid(gf, Vector3(24, 0.2, 18), Vector3(0, -0.1, 0))
-	solid(gw, Vector3(24, 0.2, 18), Vector3(0, H + 0.1, 0))
-	for x in range(-10, 11, 4):
-		gl.box(Vector3(0.25, 0.04, 14), 0.01, Geo.at(x, H - 0.02, 0))
-	# Nordwand mit Panoramafenster
-	solid(gw, Vector3(24, 0.8, 0.4), Vector3(0, 0.4, -9.2))
-	solid(gw, Vector3(24, 0.4, 0.4), Vector3(0, H - 0.2, -9.2))
-	solid(gw, Vector3(4, H, 0.4), Vector3(-10, H / 2, -9.2))
-	solid(gw, Vector3(4, H, 0.4), Vector3(10, H / 2, -9.2))
-	for x in [-4.0, 0.0, 4.0]:
-		solid(gt, Vector3(0.25, H, 0.5), Vector3(x, H / 2, -9.1))
-	window(Vector2(16, H - 1.2), Transform3D(Basis.IDENTITY, Vector3(0, 0.8 + (H - 1.2) / 2, -9.35)), st.sys)
-	# Ostwand
-	solid(gw, Vector3(0.4, H, 18), Vector3(12.2, H / 2, 0))
-	# Südwand
-	solid(gw, Vector3(24, H, 0.4), Vector3(0, H / 2, 9.2))
-	# Westwand mit Hangarfenster und Schleuse
-	solid(gw, Vector3(0.4, 0.7, 13), Vector3(-12.2, 0.35, -2.5))
-	solid(gw, Vector3(0.4, 0.6, 18), Vector3(-12.2, H - 0.3, 0))
-	solid(gw, Vector3(0.4, H, 3), Vector3(-12.2, H / 2, -7.5))
-	solid(gw, Vector3(0.4, H, 2.2), Vector3(-12.2, H / 2, 4.9))
-	solid(gw, Vector3(0.4, H, 1.4), Vector3(-12.2, H / 2, 8.3))
-	var glass := ShipBuilder.std(Color(0.1, 0.16, 0.2), 0.9, 0.05)
-	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	glass.albedo_color = Color(0.12, 0.2, 0.26, 0.18)
-	var gg := Geo.new()
-	solid(gg, Vector3(0.05, H - 1.3, 10), Vector3(-12.2, 0.7 + (H - 1.3) / 2, -1.0), 0.0)
-	gg.to_node(self, glass, false)
-	# Schleusentür
-	ga.box(Vector3(0.2, 2.6, 0.15), 0.03, Geo.at(-12.1, 1.3, 6.0))
-	ga.box(Vector3(0.2, 2.6, 0.15), 0.03, Geo.at(-12.1, 1.3, 7.6))
-	ga.box(Vector3(0.2, 0.15, 1.75), 0.03, Geo.at(-12.1, 2.6, 6.8))
-	gl.box(Vector3(0.05, 0.08, 1.4), 0.01, Geo.at(-12.0, 2.45, 6.8))
-	add_interact(Vector3(-11.3, 1.0, 6.8), 2.2, "Schleuse · An Bord gehen", "board")
-	neon("HANGAR", Vector3(-12.0, 3.2, 6.8), PI / 2, accent, 48)
-	# Hangarbucht hinter dem Fenster mit dem eigenen Schiff
+	var ga := Geo.new()   # Akzentlicht
+	var gtr := Geo.new()  # Baumstämme
+	var glf := Geo.new()  # Blätter
+
+	# --- Promenade
+	room(gr, -16, 16, -12, 12, H, [
+		{"side": "n", "from": -10.0, "to": 10.0, "h": 7.0, "y0": 1.0},
+		{"side": "e", "from": -2.0, "to": 2.0, "h": 3.4},
+		{"side": "w", "from": -2.0, "to": 2.0, "h": 3.8}])
+	window(Vector2(20, 6), Transform3D(Basis.IDENTITY, Vector3(0, 4.0, -12.25)), st.sys, spos)
+	for x in [-5.0, 0.0, 5.0]:
+		solid(gm, Vector3(0.3, 6.0, 0.4), Vector3(x, 4.0, -12.0), 0.06)
+	solid(gm, Vector3(20.4, 0.3, 0.5), Vector3(0, 1.0, -11.95), 0.05)
+	# Galerie (obere Ebene, nur Optik)
+	gm.box(Vector3(32, 0.3, 2.5), 0.05, Geo.at(0, 4.3, 10.75))
+	gm.box(Vector3(2.5, 0.3, 24), 0.05, Geo.at(14.75, 4.3, 0))
+	gm.box(Vector3(2.5, 0.3, 24), 0.05, Geo.at(-14.75, 4.3, 0))
+	for x in range(-15, 16, 3):
+		gm.box(Vector3(0.06, 1.0, 0.06), 0.01, Geo.at(x, 4.95, 9.5))
+	for x in [-12.0, -6.0, 6.0, 12.0]:
+		solid(gm, Vector3(0.3, 4.2, 0.3), Vector3(x, 2.1, 9.55), 0.05)
+	for z in range(-11, 12, 3):
+		for sx in [-1.0, 1.0]:
+			gm.box(Vector3(0.06, 1.0, 0.06), 0.01, Geo.at(sx * 13.5, 4.95, z))
+	gm.box(Vector3(30, 0.06, 0.06), 0.01, Geo.at(0, 5.45, 9.5))
+	for sx in [-1.0, 1.0]:
+		gm.box(Vector3(0.06, 0.06, 22), 0.01, Geo.at(sx * 13.5, 5.45, 0))
+	gl.box(Vector3(30, 0.04, 0.06), 0.01, Geo.at(0, 4.13, 9.5))
+	var ggal := Geo.new()
+	for x in range(-13, 14, 4):
+		ggal.box(Vector3(1.6, 2.2, 0.05), 0.02, Geo.at(x, 5.6, 11.75))
+	for z in range(-9, 10, 4):
+		for sx in [-1.0, 1.0]:
+			ggal.box(Vector3(0.05, 2.2, 1.6), 0.02, Geo.at(sx * 15.75, 5.6, z))
+	ggal.to_node(self, ShipBuilder.emissive(Color(1.0, 0.8, 0.55).lerp(accent, 0.25) * 0.6, 0.9), false)
+	for x in range(-12, 13, 6):
+		gl.box(Vector3(0.35, 0.05, 20), 0.01, Geo.at(x, H - 0.03, 0))
+	ga.box(Vector3(30, 0.012, 0.08), 0.005, Geo.at(0, 0.006, 0.0))
+	# Mitte: Auftragskiosk mit Sternkarte
+	var up := Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(0, 0, -2))
+	gt.cyl(2.4, 2.5, 0.0, 1.05, 32, up)
+	gm.cyl(2.45, 2.45, 1.05, 1.12, 32, up)
+	gt.cyl(1.0, 1.2, 0.0, 0.25, 24, up)
+	collider(Vector3(4.6, 1.1, 4.6), Vector3(0, 0.55, -2))
+	var holo := Node3D.new()
+	holo.position = Vector3(0, 2.6, -2)
+	add_child(holo)
 	var gh := Geo.new()
-	gh.box(Vector3(30, 0.4, 30), 0.1, Geo.at(-28, -2.2, -1))
-	gh.box(Vector3(0.6, 16, 30), 0.1, Geo.at(-43, 5, -1))
-	gh.box(Vector3(30, 0.6, 30), 0.1, Geo.at(-28, 12, -1))
-	gh.box(Vector3(30, 16, 0.6), 0.1, Geo.at(-28, 5, -16))
-	gh.box(Vector3(30, 16, 0.6), 0.1, Geo.at(-28, 5, 14))
-	for z in [-10.0, -1.0, 8.0]:
-		gl.box(Vector3(18, 0.1, 0.4), 0.02, Geo.at(-28, 11.6, z))
-	gh.to_node(self, ShipBuilder.std(wall_c * 0.6, 0.5, 0.5))
+	gh.torus(1.6, 0.012, 64, 4, Transform3D(Basis(Vector3.RIGHT, PI / 2), Vector3.ZERO))
+	gh.torus(1.0, 0.01, 48, 4, Transform3D(Basis(Vector3.RIGHT, PI / 2 + 0.3), Vector3.ZERO))
+	gh.torus(0.55, 0.01, 40, 4, Transform3D(Basis(Vector3.RIGHT, PI / 2 - 0.2), Vector3.ZERO))
+	for i in 14:
+		var a := TAU * i / 14.0
+		var r := 0.4 + (i % 4) * 0.35
+		gh.sphere(0.05, 8, 4, Geo.at(cos(a) * r, sin(a * 3.0) * 0.25, sin(a) * r))
+	gh.sphere(0.12, 12, 6, Transform3D.IDENTITY)
+	gh.to_node(holo, ShipBuilder.emissive(Color(0.35, 0.7, 1.0), 2.4), false)
+	spinners.append({"node": holo, "speed": 0.25})
+	var mara := add_actor(Actor.human({"female": true, "top": Color(0.16, 0.22, 0.32), "accent": Color(0.62, 0.83, 1.0), "hair_style": 3, "hair": Color(0.3, 0.18, 0.1), "pads": true}, rng), Vector3(0, 0, -0.6), PI, "idle")
+	label3d(mara, "Auftraggeberin", "Mara Lenz")
+	add_interact(Vector3(0, 1.0, 1.2), 2.6, "Auftraggeberin Mara · Frachtaufträge", "jobs")
+	neon("AUFTRÄGE", Vector3(0, 4.6, -2), 0.0, Color(0.62, 0.83, 1.0), 72)
+	# Ausrüster (Süd-Ost)
+	solid(gt, Vector3(6.5, 1.05, 1.0), Vector3(8.5, 0.52, 9.0))
+	gm.box(Vector3(6.55, 0.05, 1.05), 0.02, Geo.at(8.5, 1.06, 9.0))
+	ga.box(Vector3(6.5, 0.03, 0.03), 0.01, Geo.at(8.5, 1.0, 8.49))
+	for k in 4:
+		var x := 6.0 + k * 1.7
+		solid(gm, Vector3(1.2, 0.08, 0.7), Vector3(x, 1.9, 11.4), 0.02, false)
+		solid(gm, Vector3(1.2, 0.08, 0.7), Vector3(x, 2.9, 11.4), 0.02, false)
+		gm.cyl(0.25, 0.32, -0.4, 0.4, 14, Geo.at(x, 2.25, 11.4))
+		gm.cyl(0.08, 0.06, -0.6, -0.4, 8, Geo.at(x, 2.25, 11.4))
+		ga.cyl(0.2, 0.2, 0.39, 0.42, 14, Geo.at(x, 2.25, 11.4), true)
+	neon("AUSRÜSTER", Vector3(8.5, 3.7, 11.75), PI, Color(1.0, 0.71, 0.28), 72)
+	var jonas := add_actor(Actor.human({"female": false, "top": Color(0.32, 0.26, 0.18), "accent": Color(1.0, 0.71, 0.28), "hair_style": 4, "cap": true, "top2": Color(0.6, 0.4, 0.12)}, rng), Vector3(8.5, 0, 10.2), 0.0, "idle")
+	label3d(jonas, "Ausrüster", "Jonas Brack")
+	add_interact(Vector3(8.5, 1.0, 7.6), 2.6, "Ausrüster Jonas · Teile, Tuning, Reparatur", "shop")
+	# Lackiererei (Süd-West)
+	solid(gt, Vector3(6.0, 1.05, 1.0), Vector3(-8.5, 0.52, 9.0))
+	gm.box(Vector3(6.05, 0.05, 1.05), 0.02, Geo.at(-8.5, 1.06, 9.0))
+	ga.box(Vector3(6.0, 0.03, 0.03), 0.01, Geo.at(-8.5, 1.0, 8.49))
+	var cols := [Color(0.66, 0.2, 0.17), Color(0.95, 0.76, 0.19), Color(0.18, 0.29, 0.42), Color(0.25, 0.76, 0.79), Color(0.36, 0.39, 0.28), Color(0.85, 0.82, 0.9), Color(0.12, 0.12, 0.14)]
+	var gpaint := Geo.new()
+	for k in 7:
+		gpaint.col = cols[k]
+		gpaint.box(Vector3(0.7, 2.2, 0.06), 0.02, Geo.at(-11.4 + k * 0.85, 2.4, 11.75))
+	gpaint.to_node(self, Actor.vmat(0.25, 0.3))
+	neon("LACKIEREREI", Vector3(-8.5, 3.9, 11.75), PI, Color(1.0, 0.45, 0.6), 66)
+	var ida := add_actor(Actor.human({"female": true, "top": Color(0.2, 0.2, 0.23), "accent": Color(1.0, 0.45, 0.6), "hair_style": 1, "hair": Color(0.7, 0.15, 0.2), "visor": true}, rng), Vector3(-8.5, 0, 10.2), 0.0, "idle")
+	label3d(ida, "Lackiererin", "Ida Farn")
+	add_interact(Vector3(-8.5, 1.0, 7.6), 2.6, "Lackiererin Ida · Schiff gestalten", "paint")
+	# Info-Bot am Hangar
+	var info := add_actor(Actor.human({"robot": true, "accent": accent.lightened(0.2)}, rng), Vector3(-13.2, 0, 3.6), -PI / 2 + 0.4, "idle")
+	label3d(info, "Info-Bot", "IB-12")
+	add_interact(Vector3(-12.0, 1.0, 3.2), 2.2, "Info-Bot · Tipps und Hilfe", "info")
+	# Bänke, Pflanzen
+	for p in [Vector3(-8, 0, -6), Vector3(8, 0, -6), Vector3(-8, 0, 3), Vector3(8, 0, 3)]:
+		planter(gt, gtr, glf, p)
+	bench(gt, Vector3(-4.5, 0, -8.5), true)
+	bench(gt, Vector3(4.5, 0, -8.5), true)
+	bench(gt, Vector3(-11.5, 0, -4), false)
+	bench(gt, Vector3(11.5, 0, -6), false)
+	neon("HANGAR", Vector3(-15.75, 4.3, 0), PI / 2, accent, 64)
+	neon("BAR", Vector3(15.75, 3.9, 0), -PI / 2, Color(1.0, 0.5, 0.25), 72)
+	neon(String(st.name).to_upper(), Vector3(0, 7.2, -11.75), 0.0, accent, 110)
+	door(Vector3(-16.0, 0, 0), 4.0, 3.8, true, accent)
+	# Menschen und Roboter
+	for i in 5:
+		var w := add_actor(Actor.human(_people_cfg(rng), rng), Vector3(rng.randf_range(-10, 10), 0, rng.randf_range(-7, 6)), rng.randf() * TAU, "walk")
+		w.area = AABB(Vector3(-12, 0, -9), Vector3(24, 0, 14))
+		w.speed = rng.randf_range(0.9, 1.3)
+		w._pick_target()
+	add_actor(Actor.human(_people_cfg(rng), rng), Vector3(-4.5, 0, -8.5), 0.0, "sit")
+	var d1 := add_actor(Actor.drone(accent, rng), Vector3(0, 5.5, 2), 0.0, "fly")
+	d1.area = AABB(Vector3(-12, 5.0, -8), Vector3(24, 1.5, 16))
+	var d2 := add_actor(Actor.drone(Color(1.0, 0.71, 0.28), rng), Vector3(6, 3.5, -4), 0.0, "fly")
+	d2.area = AABB(Vector3(-10, 2.8, -9), Vector3(20, 1.5, 14))
+	var cl := add_actor(Actor.cleaner(rng), Vector3(4, 0, 0), 0.0, "clean")
+	cl.area = AABB(Vector3(-12, 0, -9), Vector3(24, 0, 15))
+	cl._pick_target()
+
+	# --- Bar
+	var bar_c := Color(0.3, 0.22, 0.2) if not free else Color(0.18, 0.12, 0.16)
+	var grb := Geo.new()
+	room(grb, 16, 30, -9, 7, 4.4, [{"side": "w", "from": -9.0, "to": 7.0, "h": 4.4}, {"side": "s", "from": 18.0, "to": 27.0, "h": 3.6, "y0": 0.9}])
+	window(Vector2(9, 2.7), Transform3D(Basis(Vector3.UP, PI), Vector3(22.5, 2.25, 7.25)), st.sys, spos)
+	solid(gt, Vector3(1.1, 1.1, 9.0), Vector3(26.2, 0.55, -2.5))
+	gm.box(Vector3(1.15, 0.06, 9.05), 0.02, Geo.at(26.2, 1.12, -2.5))
+	ga.box(Vector3(0.03, 0.03, 9.0), 0.01, Geo.at(25.64, 1.05, -2.5))
+	gl.box(Vector3(0.05, 0.04, 8.8), 0.01, Geo.at(25.62, 0.25, -2.5))
+	for k in 3:
+		solid(gm, Vector3(0.5, 0.06, 8.0), Vector3(29.6, 1.6 + k * 0.6, -2.5), 0.02, false)
+	var gbot := Geo.new()
+	for k in 3:
+		for j in 14:
+			gbot.col = [Color(1, 0.5, 0.2), Color(0.4, 1, 0.6), Color(0.5, 0.7, 1), Color(1, 0.3, 0.6), Color(1, 0.9, 0.4)][(j + k) % 5]
+			gbot.cyl(0.06, 0.05, 0.0, 0.3, 8, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(29.5, 1.63 + k * 0.6, -6.0 + j * 0.5)))
+	var bm := StandardMaterial3D.new()
+	bm.vertex_color_use_as_albedo = true
+	bm.emission_enabled = true
+	bm.emission = Color(0.6, 0.5, 0.4)
+	bm.emission_energy_multiplier = 0.8
+	bm.roughness = 0.1
+	gbot.to_node(self, bm, false)
+	for k in 4:
+		var z := -6.0 + k * 2.2
+		gm.cyl(0.25, 0.25, 0.0, 0.06, 12, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(25.0, 0.72, z)))
+		gt.cyl(0.04, 0.04, 0.0, 0.72, 6, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(25.0, 0.0, z)))
+	for p in [Vector3(20, 0, -5), Vector3(20, 0, 1), Vector3(23, 0, 4.5)]:
+		gt.cyl(0.6, 0.6, 0.72, 0.78, 20, Transform3D(Basis(Vector3.RIGHT, -PI / 2), p))
+		gt.cyl(0.08, 0.2, 0.0, 0.72, 8, Transform3D(Basis(Vector3.RIGHT, -PI / 2), p))
+		collider(Vector3(1.2, 0.8, 1.2), p + Vector3(0, 0.4, 0))
+		ga.torus(0.6, 0.015, 32, 4, Transform3D(Basis(Vector3.RIGHT, PI / 2), p + Vector3(0, 0.78, 0)))
+		for sx in [-1.0, 1.0]:
+			gm.cyl(0.22, 0.22, 0.42, 0.48, 12, Transform3D(Basis(Vector3.RIGHT, -PI / 2), p + Vector3(sx * 1.0, 0, 0)))
+			gt.cyl(0.04, 0.04, 0.0, 0.42, 6, Transform3D(Basis(Vector3.RIGHT, -PI / 2), p + Vector3(sx * 1.0, 0, 0)))
+	solid(gt, Vector3(0.9, 1.6, 0.6), Vector3(17.0, 0.8, -8.3), 0.15)
+	var gj := Geo.new()
+	gj.torus(0.35, 0.04, 24, 6, Transform3D(Basis.IDENTITY, Vector3(17.0, 1.2, -7.98)))
+	gj.box(Vector3(0.7, 0.05, 0.02), 0.01, Geo.at(17.0, 0.5, -7.99))
+	gj.to_node(self, ShipBuilder.emissive(Color(1.0, 0.3, 0.7), 3.0), false)
+	neon("ZUR LETZTEN SCHLEUSE", Vector3(23.0, 3.6, -8.75), 0.0, Color(1.0, 0.5, 0.25), 60)
+	var sully := add_actor(Actor.human({"female": false, "top": Color(0.3, 0.16, 0.14), "accent": Color(1.0, 0.5, 0.25), "hair_style": 4, "hair": Color(0.55, 0.55, 0.58)}, rng), Vector3(27.6, 0, -1.0), PI / 2, "wipe")
+	label3d(sully, "Barkeeper", "Old Sully")
+	add_interact(Vector3(25.0, 1.0, -1.0), 2.4, "Barkeeper Sully · Neuigkeiten & Kopfgeld", "bar")
+	var servo := add_actor(Actor.human({"robot": true, "accent": Color(1.0, 0.5, 0.25), "top": Color(0.5, 0.25, 0.15)}, rng), Vector3(27.6, 0, -5.2), PI / 2, "wipe")
+	servo.ph = 2.0
+	add_actor(Actor.human(_people_cfg(rng), rng), Vector3(19.0, 0, -5), PI / 2, "sit")
+	add_actor(Actor.human(_people_cfg(rng), rng), Vector3(21.0, 0, 1), -PI / 2, "sit")
+	add_actor(Actor.human(_people_cfg(rng), rng), Vector3(24.4, 0, -6.0), PI / 2, "sit")
+	lamp(Vector3(21, 3.8, -4), Color(1.0, 0.75, 0.45), 2.6, 11.0)
+	lamp(Vector3(21, 3.8, 3), Color(1.0, 0.6, 0.4), 2.2, 10.0)
+	lamp(Vector3(27, 3.6, -2.5), Color(1.0, 0.85, 0.6), 2.4, 9.0)
+	grb.to_node(self, room_mat(bar_c, Color(1.0, 0.5, 0.25), Color(0.16, 0.12, 0.1), Color(0.18, 0.14, 0.12), 1.2, 2.9, 0.8))
+
+	# --- Gang und Hangar
+	var grh := Geo.new()
+	room(grh, -20, -16, -2, 2, 4.0, [{"side": "e", "from": -2.0, "to": 2.0, "h": 3.8}, {"side": "w", "from": -2.0, "to": 2.0, "h": 3.8}])
+	room(grh, -54, -20, -17, 17, 14.0, [{"side": "e", "from": -2.0, "to": 2.0, "h": 3.8}, {"side": "w", "from": -12.0, "to": 12.0, "h": 11.0, "y0": 1.0}])
+	window(Vector2(24, 10), Transform3D(Basis(Vector3.UP, PI / 2), Vector3(-54.3, 6.0, 0)), st.sys, spos)
+	var gfield := Geo.new()
+	gfield.box(Vector3(0.05, 10, 24), 0.0, Geo.at(-54.0, 6.0, 0))
+	var fm := StandardMaterial3D.new()
+	fm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fm.albedo_color = Color(accent.r, accent.g, accent.b, 0.08)
+	fm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	gfield.to_node(self, fm, false)
+	collider(Vector3(0.4, 12, 24), Vector3(-54.0, 6.0, 0))
+	ga.box(Vector3(0.2, 0.15, 24), 0.03, Geo.at(-53.9, 1.0, 0))
+	ga.box(Vector3(0.2, 0.15, 24), 0.03, Geo.at(-53.9, 11.0, 0))
+	door(Vector3(-20.0, 0, 0), 4.0, 3.8, true, accent)
+	# Landeplattform
+	var pad := Vector3(-37, 0, 0)
+	gt.cyl(9.5, 9.5, 0.0, 0.08, 48, Transform3D(Basis(Vector3.RIGHT, -PI / 2), pad))
+	var gpad := Geo.new()
+	gpad.torus(9.0, 0.06, 64, 4, Transform3D(Basis(Vector3.RIGHT, PI / 2), pad + Vector3(0, 0.09, 0)))
+	gpad.torus(5.0, 0.04, 48, 4, Transform3D(Basis(Vector3.RIGHT, PI / 2), pad + Vector3(0, 0.09, 0)))
+	gpad.to_node(self, ShipBuilder.emissive(Color(1.0, 0.71, 0.28), 1.3), false)
+	# Das eigene Schiff in Originalgröße
 	var ship := ShipBuilder.build(ship_fit, ship_paint)
 	ship.get_meta("load").visible = has_job
 	for f in ship.get_meta("flames"):
 		f.visible = false
-	ship.position = Vector3(-28, 1.2, -1)
-	ship.rotation.y = PI / 2 + 0.35
-	var sc: float = 14.0 / maxf(float(Game.part("frame", ship_fit.frame).dim.z), 11.0)
-	ship.scale = Vector3.ONE * minf(1.0, sc)
+	var aabb := Hangar._aabb(ship, Transform3D.IDENTITY)
+	ship.rotation.y = PI / 2
+	ship.position = pad + Vector3(-aabb.get_center().z, -aabb.position.y + 0.1, aabb.get_center().x)
 	add_child(ship)
-	lamp(Vector3(-28, 9, -1), Color(1.0, 0.92, 0.8), 3.0, 30.0)
-	lamp(Vector3(-20, 3, 6), accent, 1.5, 14.0)
-	# Auftragsbrett (Ost)
-	solid(gt, Vector3(1.0, 1.05, 4.0), Vector3(10.6, 0.52, -2.5))
-	ga.box(Vector3(1.05, 0.06, 4.05), 0.02, Geo.at(10.6, 1.06, -2.5))
-	var gholo := Geo.new()
-	gholo.box(Vector3(0.05, 2.0, 3.6), 0.01, Geo.at(11.95, 2.6, -2.5))
-	gholo.to_node(self, ShipBuilder.emissive(Color(0.2, 0.45, 0.8), 0.9), false)
-	neon("AUFTRÄGE", Vector3(11.9, 3.85, -2.5), -PI / 2, Color(0.62, 0.83, 1.0), 64)
-	person(Vector3(11.4, 0, -2.5), -PI / 2, Color(0.18, 0.22, 0.3), Color(0.62, 0.83, 1.0), "Auftraggeberin", "Mara Lenz")
-	add_interact(Vector3(9.6, 1.0, -2.5), 2.4, "Auftraggeberin Mara · Frachtaufträge", "jobs")
-	# Ausrüster (Süd-Ost)
-	solid(gt, Vector3(4.5, 1.05, 1.0), Vector3(5.5, 0.52, 7.8))
-	ga.box(Vector3(4.55, 0.06, 1.05), 0.02, Geo.at(5.5, 1.06, 7.8))
-	for k in 4:
-		solid(gt, Vector3(0.9, 0.9, 0.6), Vector3(3.8 + k * 1.15, 1.6, 8.7), 0.05, false)
-		gl.box(Vector3(0.5, 0.05, 0.3), 0.01, Geo.at(3.8 + k * 1.15, 2.1, 8.6))
-	neon("AUSRÜSTER", Vector3(5.5, 3.6, 8.95), PI, Color(1.0, 0.71, 0.28), 64)
-	person(Vector3(5.5, 0, 8.5), PI, Color(0.32, 0.28, 0.22), Color(1.0, 0.71, 0.28), "Ausrüster", "Jonas Brack")
-	add_interact(Vector3(5.5, 1.0, 6.7), 2.4, "Ausrüster Jonas · Teile kaufen & reparieren", "shop")
-	# Lackierer (Süd-West)
-	solid(gt, Vector3(4.0, 1.05, 1.0), Vector3(-5.5, 0.52, 7.8))
-	var gcol := Geo.new()
-	var cols := [Color(0.66, 0.2, 0.17), Color(0.95, 0.76, 0.19), Color(0.18, 0.29, 0.42), Color(0.25, 0.76, 0.79), Color(0.36, 0.39, 0.28), Color(0.85, 0.82, 0.9)]
-	for k in 6:
-		var gk := Geo.new()
-		gk.box(Vector3(0.55, 1.6, 0.06), 0.02, Geo.at(-7.4 + k * 0.72, 2.2, 8.95))
-		gk.to_node(self, ShipBuilder.std(cols[k], 0.3, 0.35))
-	neon("LACKIEREREI", Vector3(-5.5, 3.6, 8.95), PI, Color(1.0, 0.45, 0.6), 60)
-	person(Vector3(-5.5, 0, 8.5), PI, Color(0.25, 0.25, 0.27), Color(1.0, 0.45, 0.6), "Lackiererin", "Ida Farn")
-	add_interact(Vector3(-5.5, 1.0, 6.7), 2.4, "Lackiererin Ida · Schiff gestalten", "paint")
-	# Bar (Nord-Ost)
-	solid(gt, Vector3(5.0, 1.1, 1.0), Vector3(8.5, 0.55, -6.2))
-	ga.box(Vector3(5.05, 0.07, 1.1), 0.02, Geo.at(8.5, 1.12, -6.2))
-	gl.box(Vector3(4.8, 0.04, 0.05), 0.01, Geo.at(8.5, 0.3, -5.68))
-	for k in 5:
-		var gb2 := Geo.new()
-		gb2.cyl(0.07, 0.07, 0.0, 0.28, 8, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(6.6 + k * 0.9, 1.15, -6.4)))
-		gb2.to_node(self, ShipBuilder.emissive([Color(1, 0.5, 0.2), Color(0.4, 1, 0.6), Color(0.5, 0.7, 1), Color(1, 0.3, 0.6), Color(1, 0.9, 0.4)][k], 1.5), false)
-	for k in 4:
-		gt.cyl(0.25, 0.25, 0.0, 0.08, 12, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(6.8 + k * 1.2, 0.75, -5.3)))
-		gt.cyl(0.05, 0.05, 0.0, 0.75, 6, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(6.8 + k * 1.2, 0.0, -5.3)))
-	neon("BAR · ZUR LETZTEN SCHLEUSE", Vector3(8.5, 3.4, -8.95), 0.0, Color(1.0, 0.5, 0.25), 48)
-	person(Vector3(8.5, 0, -7.2), 0.0, Color(0.3, 0.16, 0.14), Color(1.0, 0.5, 0.25), "Barkeeper", "Old Sully")
-	add_interact(Vector3(8.5, 1.0, -5.2), 2.4, "Barkeeper Sully · Neuigkeiten & Kopfgeld", "bar")
-	# Mitte: Säulen, Bänke, Pflanzen
-	for p in [Vector3(-4, 0, -3), Vector3(4, 0, -3), Vector3(-4, 0, 3), Vector3(4, 0, 3)]:
-		solid(gw, Vector3(0.7, H, 0.7), p + Vector3(0, H / 2, 0), 0.1)
-		gl.box(Vector3(0.74, 0.06, 0.74), 0.01, Geo.at(p.x, 2.6, p.z))
-	for p in [Vector3(0, 0, -1.5), Vector3(0, 0, 1.5)]:
-		solid(gt, Vector3(3.0, 0.45, 0.6), p + Vector3(0, 0.22, 0), 0.08)
-	for p in [Vector3(-9, 0, -7.5), Vector3(-1.8, 0, -7.8), Vector3(1.8, 0, -7.8)]:
-		solid(gt, Vector3(0.9, 0.7, 0.9), p + Vector3(0, 0.35, 0), 0.1)
-		for k in 6:
-			var a := TAU * k / 6.0
-			gp.frustum(Vector2(0.18, 0.05), Vector2(0.02, 0.02), 1.2, Transform3D(Basis(Vector3(cos(a), 0, sin(a)).cross(Vector3.UP).normalized(), 0.5) * Basis(Vector3.RIGHT, -PI / 2), p + Vector3(cos(a) * 0.2, 1.1, sin(a) * 0.2)))
-	# Bodenleitlinien
-	gl.box(Vector3(0.12, 0.02, 14), 0.01, Geo.at(-8, 0.01, 0))
-	gl.box(Vector3(0.12, 0.02, 14), 0.01, Geo.at(8, 0.01, 0))
-	# Passanten
-	person(Vector3(-2, 0, 0), 0.0, Color(0.4, 0.42, 0.45), accent, "", "", true)
-	person(Vector3(2, 0, -5), 1.0, Color(0.22, 0.3, 0.26), Color(0.5, 0.9, 0.6), "", "", true)
-	person(Vector3(-7.4, 0, -5.4), 0.6, Color(0.35, 0.25, 0.35), Color(1, 0.7, 0.4), "", "")
+	var len_s := aabb.size.z
+	var wid_s := aabb.size.x
+	collider(Vector3(len_s * 0.92, aabb.size.y, wid_s * 0.9), Vector3(pad.x, aabb.size.y / 2 + 0.1, pad.z))
+	var side_z := wid_s / 2 + 1.4
+	add_interact(Vector3(pad.x, 1.0, side_z), 3.4, "«%s» · An Bord gehen" % Game.s.name, "board")
+	add_interact(Vector3(pad.x, 1.0, -side_z), 3.4, "«%s» · An Bord gehen" % Game.s.name, "board")
+	gm.box(Vector3(2.0, 0.12, 2.6), 0.03, Geo.at(pad.x, 0.06, side_z - 0.2))
+	ga.box(Vector3(2.0, 0.02, 0.06), 0.01, Geo.at(pad.x, 0.13, side_z + 1.05))
+	# Roboter am Schiff
+	for p in [[Vector3(pad.x - len_s * 0.3, 0, side_z + 1.6), PI], [Vector3(pad.x + len_s * 0.3, 0, -side_z - 1.6), 0.0]]:
+		var w := add_actor(Actor.welder(), p[0], 0.0, "weld")
+		w.base_rot = p[1]
+		w.ph = rng.randf() * 4.0
+		collider(Vector3(1.0, 1.0, 1.0), p[0] + Vector3(0, 0.5, 0))
+	var ld := add_actor(Actor.loader(accent), Vector3(-46, 0, -12.5), 0.0, "load")
+	ld.path = [Vector3(-46, 0, -12.5), Vector3(-26, 0, -12.5)]
+	var dr := add_actor(Actor.drone(accent, rng), Vector3(-30, 6, 6), 0.0, "fly")
+	dr.area = AABB(Vector3(-50, 4.0, -14), Vector3(28, 6.0, 28))
+	var cl2 := add_actor(Actor.cleaner(rng), Vector3(-25, 0, 6), 0.0, "clean")
+	cl2.area = AABB(Vector3(-30, 0, 4), Vector3(8, 0, 8))
+	cl2._pick_target()
+	# Kisten
+	var gcr := Geo.new()
+	for i in 10:
+		var cx := -50.0 + (i % 5) * 1.6
+		var cz := 13.0 + int(i / 5) * 1.7
+		var hgt := 2.8 if i % 3 == 0 else 1.4
+		gcr.col = Color.html(ShipBuilder.CONTAINER_COLORS[i % 3])
+		solid(gcr, Vector3(1.4, hgt, 1.5), Vector3(cx, hgt / 2, cz), 0.04)
+	gcr.to_node(self, Actor.vmat(0.55, 0.2))
+	# Mechaniker-Roboter R-7 an der Werkbank
+	solid(gt, Vector3(3.0, 1.0, 1.0), Vector3(-24, 0.5, 15.6))
+	gm.box(Vector3(2.8, 0.05, 0.9), 0.01, Geo.at(-24, 1.02, 15.6))
+	for k in 3:
+		gm.cyl(0.08, 0.08, 0.0, 0.25, 8, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(-25 + k * 0.8, 1.05, 15.6)))
+	var r7 := add_actor(Actor.human({"robot": true, "accent": Color(0.5, 0.9, 0.55), "top": Color(0.85, 0.6, 0.15)}, rng), Vector3(-24, 0, 14.6), 0.0, "idle")
+	label3d(r7, "Mechanik-Einheit", "R-7")
+	add_interact(Vector3(-24, 1.0, 13.2), 2.4, "Mechanik-Roboter R-7 · Teile tunen", "tune")
+	neon("WERKSTATT", Vector3(-24, 3.0, 16.75), PI, Color(0.5, 0.9, 0.55), 56)
+	neon("HANGAR %d" % (1 + absi(hash(st.id)) % 9), Vector3(-20.25, 8.0, 0), -PI / 2, accent, 140)
+	for x in [-46.0, -37.0, -28.0]:
+		gl.box(Vector3(0.5, 0.06, 26), 0.02, Geo.at(x, 13.96, 0))
+		lamp(Vector3(x, 11.0, 0), Color(1.0, 0.95, 0.88), 4.0, 24.0)
+	lamp(Vector3(-37, 2.0, 0), accent, 1.2, 10.0)
+	grh.to_node(self, room_mat(wall_c * 0.85, accent, Color(0.18, 0.19, 0.21), Color(0.22, 0.23, 0.26), 2.4, 3.4, 1.0))
 
-	gf.to_node(self, ShipBuilder.hull_mat(Color(0.22, 0.23, 0.26) if not free else Color(0.1, 0.1, 0.12), accent, 0, Vector3(12, 1, 9), 0.6, 0.3, 0.45, 0.5))
-	gw.to_node(self, ShipBuilder.hull_mat(wall_c, accent, 0, Vector3(12, 3, 9), 0.9, 0.15, 0.6, 0.6))
-	gt.to_node(self, ShipBuilder.std(Color(0.16, 0.17, 0.2), 0.4, 0.45))
-	gl.to_node(self, ShipBuilder.emissive(Color(1.0, 0.92, 0.8) if not free else accent, 1.6), false)
-	ga.to_node(self, ShipBuilder.emissive(accent, 0.9), false)
-	gp.to_node(self, ShipBuilder.std(Color(0.2, 0.45, 0.22), 0.0, 0.8))
-	for p in [Vector3(-6, 3.8, -4), Vector3(6, 3.8, -4), Vector3(-6, 3.8, 4), Vector3(6, 3.8, 4), Vector3(0, 3.8, 0)]:
-		lamp(p, Color(1.0, 0.93, 0.85) if not free else accent.lerp(Color.WHITE, 0.4), 1.4, 9.0)
-	neon(String(st.name).to_upper(), Vector3(0, 3.9, 8.95), PI, accent, 80)
-	spawn = Transform3D(Basis(Vector3.UP, -PI / 2 - 0.5), Vector3(-9.5, 0.1, 6.0))
+	# Promenade-Licht und Materialien
+	for p in [Vector3(-9, 7.0, -6), Vector3(9, 7.0, -6), Vector3(-9, 7.0, 6), Vector3(9, 7.0, 6), Vector3(0, 7.0, 0)]:
+		lamp(p, Color(1.0, 0.93, 0.85) if not free else accent.lerp(Color.WHITE, 0.4), 3.2, 18.0)
+	lamp(Vector3(0, 3.2, -2), Color(0.4, 0.7, 1.0), 1.2, 6.0)
+	gr.to_node(self, room_mat(wall_c, accent, Color(0.2, 0.21, 0.24) if not free else Color(0.1, 0.1, 0.12), Color(0.3, 0.31, 0.34), 1.6, 2.65, 1.0))
+	gt.to_node(self, ShipBuilder.std(Color(0.14, 0.15, 0.18), 0.45, 0.4))
+	gm.to_node(self, ShipBuilder.std(Color(0.55, 0.57, 0.6), 0.7, 0.3))
+	gl.to_node(self, ShipBuilder.emissive(Color(1.0, 0.94, 0.85) if not free else accent, 1.8), false)
+	ga.to_node(self, ShipBuilder.emissive(accent, 1.2), false)
+	gtr.to_node(self, ShipBuilder.std(Color(0.3, 0.2, 0.12), 0.0, 0.9))
+	glf.to_node(self, ShipBuilder.std(Color(0.2, 0.48, 0.22), 0.0, 0.7))
+	probe(Vector3(0, 4, 0), Vector3(32, 8, 24))
+	probe(Vector3(23, 2.2, -1), Vector3(14, 4.4, 16))
+	probe(Vector3(-37, 7, 0), Vector3(34, 14, 34))
+	spawns["dock"] = Transform3D(Basis(Vector3.UP, 0.4), Vector3(pad.x + 1.5, 0.1, side_z + 2.0))
+	spawns["ship"] = spawns["dock"]
+	spawns["hall"] = Transform3D(Basis(Vector3.UP, -PI / 2), Vector3(-13.0, 0.1, 0.0))
+	spawn = spawns["dock"]
 
 # ------------------------------------------------------------------ Schiffsinneres
 func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: String) -> void:
 	clear()
 	kind = "ship"
+	rng.seed = 7
 	var F := Game.part("frame", fit.frame)
 	var style := int(F.style)
 	var L: float = [10.0, 14.0, 12.0, 18.0][style]
@@ -310,8 +567,7 @@ func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: Str
 	var hc := Color.html(paint.hull)
 	var ac := Color.html(paint.accent)
 	var fc := Game.flame_color(paint, fit.engine)
-	var gf := Geo.new()
-	var gw := Geo.new()
+	var gr := Geo.new()
 	var gt := Geo.new()
 	var gl := Geo.new()
 	var ga := Geo.new()
@@ -319,31 +575,24 @@ func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: Str
 	var gsc := Geo.new()
 	var z0 := -L / 2
 	var z1 := L / 2
-	# Korridor
-	solid(gf, Vector3(W, 0.2, L), Vector3(0, -0.1, 0))
-	solid(gw, Vector3(W, 0.2, L), Vector3(0, H + 0.1, 0))
-	solid(gw, Vector3(0.2, H, L), Vector3(-W / 2 - 0.1, H / 2, 0))
-	solid(gw, Vector3(0.2, H, L), Vector3(W / 2 + 0.1, H / 2, 0))
-	for z in range(int(z0) + 1, int(z1), 2):
-		gt.box(Vector3(W + 0.1, 0.18, 0.25), 0.04, Geo.at(0, H - 0.09, z))
-		gt.box(Vector3(0.18, H, 0.25), 0.04, Geo.at(-W / 2 + 0.05, H / 2, z))
-		gt.box(Vector3(0.18, H, 0.25), 0.04, Geo.at(W / 2 - 0.05, H / 2, z))
-	gl.box(Vector3(0.06, 0.03, L), 0.01, Geo.at(-W / 2 + 0.2, 0.02, 0))
-	gl.box(Vector3(0.06, 0.03, L), 0.01, Geo.at(W / 2 - 0.2, 0.02, 0))
-	gs.box(Vector3(0.5, 0.03, L - 1.0), 0.01, Geo.at(0, H - 0.02, 0))
-	# Cockpit
 	var cw := 4.4
 	var cd := 3.4
-	solid(gf, Vector3(cw, 0.2, cd), Vector3(0, -0.1, z0 - cd / 2))
-	solid(gw, Vector3(cw, 0.2, cd), Vector3(0, H + 0.3, z0 - cd / 2))
-	solid(gw, Vector3(0.2, H + 0.4, cd), Vector3(-cw / 2 - 0.1, H / 2, z0 - cd / 2))
-	solid(gw, Vector3(0.2, H + 0.4, cd), Vector3(cw / 2 + 0.1, H / 2, z0 - cd / 2))
-	solid(gw, Vector3((cw - W) / 2, H, 0.2), Vector3(-(W + cw) / 4, H / 2, z0))
-	solid(gw, Vector3((cw - W) / 2, H, 0.2), Vector3((W + cw) / 4, H / 2, z0))
-	solid(gw, Vector3(cw, 0.9, 0.3), Vector3(0, 0.45, z0 - cd - 0.15))
-	window(Vector2(cw, H - 0.7), Transform3D(Basis.IDENTITY, Vector3(0, 0.9 + (H - 0.7) / 2, z0 - cd - 0.05)), sys_id)
-	window(Vector2(cd * 0.7, 1.2), Transform3D(Basis(Vector3.UP, PI / 2), Vector3(-cw / 2 + 0.01, 1.7, z0 - cd * 0.6)), sys_id)
-	window(Vector2(cd * 0.7, 1.2), Transform3D(Basis(Vector3.UP, -PI / 2), Vector3(cw / 2 - 0.01, 1.7, z0 - cd * 0.6)), sys_id)
+	var hw := 5.6
+	var hd := 5.0 + style * 1.2
+	# Gang
+	room(gr, -W / 2, W / 2, z0, z1, H, [{"side": "n", "from": -W / 2, "to": W / 2, "h": H}, {"side": "s", "from": -W / 2, "to": W / 2, "h": H}], 0.2)
+	for z in range(int(z0) + 1, int(z1), 2):
+		gt.box(Vector3(W + 0.1, 0.18, 0.25), 0.04, Geo.at(0, H - 0.09, z))
+		gt.box(Vector3(0.14, H, 0.22), 0.04, Geo.at(-W / 2 + 0.05, H / 2, z))
+		gt.box(Vector3(0.14, H, 0.22), 0.04, Geo.at(W / 2 - 0.05, H / 2, z))
+	gl.box(Vector3(0.05, 0.02, L), 0.01, Geo.at(-W / 2 + 0.2, 0.012, 0))
+	gl.box(Vector3(0.05, 0.02, L), 0.01, Geo.at(W / 2 - 0.2, 0.012, 0))
+	gs.box(Vector3(0.4, 0.03, L - 1.0), 0.01, Geo.at(0, H - 0.02, 0))
+	# Cockpit
+	room(gr, -cw / 2, cw / 2, z0 - cd, z0, H + 0.4, [{"side": "s", "from": -W / 2, "to": W / 2, "h": H}, {"side": "n", "from": -cw / 2, "to": cw / 2, "h": H + 0.1, "y0": 0.9}], 0.2)
+	window(Vector2(cw, H - 0.6), Transform3D(Basis.IDENTITY, Vector3(0, 0.9 + (H - 0.6) / 2, z0 - cd - 0.12)), sys_id)
+	window(Vector2(cd * 0.7, 1.2), Transform3D(Basis(Vector3.UP, -PI / 2), Vector3(-cw / 2 + 0.01, 1.7, z0 - cd * 0.6)), sys_id)
+	window(Vector2(cd * 0.7, 1.2), Transform3D(Basis(Vector3.UP, PI / 2), Vector3(cw / 2 - 0.01, 1.7, z0 - cd * 0.6)), sys_id)
 	gt.box(Vector3(cw - 0.4, 0.25, 0.9), 0.05, Transform3D(Basis(Vector3.RIGHT, 0.35), Vector3(0, 1.0, z0 - cd + 0.5)))
 	for sx in [-1.0, 0.0, 1.0]:
 		gsc.box(Vector3(0.7, 0.4, 0.02), 0.01, Transform3D(Basis(Vector3.RIGHT, -0.5), Vector3(sx * 0.9, 1.25, z0 - cd + 0.72)))
@@ -353,11 +602,11 @@ func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: Str
 	add_interact(Vector3(0, 1.0, z0 - 1.6), 1.8, "Pilotensitz · Abdocken", "undock")
 	# Schleuse (links, vorne)
 	var lz := z0 + 1.6
-	ga.box(Vector3(0.12, 2.2, 0.12), 0.02, Geo.at(-W / 2 + 0.02, 1.1, lz - 0.7))
-	ga.box(Vector3(0.12, 2.2, 0.12), 0.02, Geo.at(-W / 2 + 0.02, 1.1, lz + 0.7))
-	ga.box(Vector3(0.12, 0.12, 1.5), 0.02, Geo.at(-W / 2 + 0.02, 2.2, lz))
-	gs.box(Vector3(0.03, 0.25, 0.25), 0.01, Geo.at(-W / 2 + 0.03, 1.3, lz + 0.95))
-	add_interact(Vector3(-W / 2 + 0.6, 1.0, lz), 1.4, "Schleuse · Station betreten", "leave")
+	ga.box(Vector3(0.1, 2.2, 0.12), 0.02, Geo.at(-W / 2 + 0.03, 1.1, lz - 0.7))
+	ga.box(Vector3(0.1, 2.2, 0.12), 0.02, Geo.at(-W / 2 + 0.03, 1.1, lz + 0.7))
+	ga.box(Vector3(0.1, 0.12, 1.5), 0.02, Geo.at(-W / 2 + 0.03, 2.2, lz))
+	gsc.box(Vector3(0.03, 0.25, 0.25), 0.01, Geo.at(-W / 2 + 0.04, 1.3, lz + 0.95))
+	add_interact(Vector3(-W / 2 + 0.6, 1.0, lz), 1.4, "Schleuse · Hangar betreten", "leave")
 	# Konsolen für Bauteile
 	var slots := [["engine", "Triebwerk"], ["rcs", "Düsen"], ["weapon", "Waffen"], ["shield", "Schild"], ["cargo", "Frachtmodul"], ["armor", "Panzerung"], ["extra", "Extra"]]
 	var per_side := 4
@@ -373,51 +622,49 @@ func build_ship(fit: Dictionary, paint: Dictionary, job: Dictionary, sys_id: Str
 		solid(gt, Vector3(0.45, 1.0, 0.9), Vector3(x, 0.5, z), 0.06)
 		gsc.box(Vector3(0.02, 0.32, 0.55), 0.01, Transform3D(Basis(Vector3.FORWARD, side * 0.25), Vector3(x - side * 0.12, 1.3, z)))
 		ga.box(Vector3(0.48, 0.05, 0.92), 0.02, Geo.at(x, 1.01, z))
-		var part := Game.part(slots[i][0], fit[slots[i][0]])
-		neon("%s\n%s" % [String(slots[i][1]).to_upper(), part.n], Vector3(x - side * 0.05, 1.95, z), -side * PI / 2, ac.lerp(Color.WHITE, 0.4), 18)
+		var pid: String = fit[slots[i][0]]
+		var part := Game.part(slots[i][0], pid)
+		var lvl := Game.tune_level(pid)
+		neon("%s\n%s%s" % [String(slots[i][1]).to_upper(), part.n, (" +%d" % lvl) if lvl > 0 else ""], Vector3(x - side * 0.05, 1.95, z), -side * PI / 2, ac.lerp(Color.WHITE, 0.4), 18)
 		add_interact(Vector3(x - side * 0.6, 1.0, z), 1.2, "%s · %s tauschen" % [slots[i][1], part.n], "console", slots[i][0])
-	# Laderaum hinten
-	var hw := 5.6
-	var hd := 5.0 + style * 1.2
-	solid(gf, Vector3(hw, 0.2, hd), Vector3(0, -0.1, z1 + hd / 2))
-	solid(gw, Vector3(hw, 0.2, hd), Vector3(0, H + 0.6, z1 + hd / 2))
-	solid(gw, Vector3(0.2, H + 0.8, hd), Vector3(-hw / 2 - 0.1, H / 2, z1 + hd / 2))
-	solid(gw, Vector3(0.2, H + 0.8, hd), Vector3(hw / 2 + 0.1, H / 2, z1 + hd / 2))
-	solid(gw, Vector3((hw - W) / 2, H, 0.2), Vector3(-(W + hw) / 4, H / 2, z1))
-	solid(gw, Vector3((hw - W) / 2, H, 0.2), Vector3((W + hw) / 4, H / 2, z1))
-	solid(gw, Vector3(hw, H + 0.8, 0.2), Vector3(0, H / 2, z1 + hd + 0.1))
-	gl.box(Vector3(hw - 0.4, 0.03, 0.06), 0.01, Geo.at(0, 0.02, z1 + 0.3))
+	# Laderaum
+	room(gr, -hw / 2, hw / 2, z1, z1 + hd, H + 0.6, [{"side": "n", "from": -W / 2, "to": W / 2, "h": H}], 0.2)
+	gl.box(Vector3(hw - 0.4, 0.02, 0.06), 0.01, Geo.at(0, 0.012, z1 + 0.3))
 	if not job.is_empty() and job.get("type", "cargo") == "cargo":
 		var n := clampi(int(job.mass / 8.0) + 1, 1, 6)
+		var gc := Geo.new()
 		for i in n:
-			var gc := Geo.new()
 			var cx := -1.6 + (i % 3) * 1.6
 			var cz := z1 + 1.5 + int(i / 3) * 1.8
+			gc.col = Color.html(ShipBuilder.CONTAINER_COLORS[i % 3])
 			solid(gc, Vector3(1.3, 1.2, 1.5), Vector3(cx, 0.6, cz), 0.05)
-			gc.to_node(self, ShipBuilder.hull_mat(Color.html(ShipBuilder.CONTAINER_COLORS[i % 3]), Color.WHITE, 6, Vector3(0.65, 0.6, 0.75), 1.0, 0.3, 0.6, 0.6))
-		neon(String(job.cargo).to_upper(), Vector3(0, 2.4, z1 + hd - 0.05), PI, ac.lerp(Color.WHITE, 0.5), 36)
+		gc.to_node(self, Actor.vmat(0.55, 0.2))
+		neon(String(job.cargo).to_upper(), Vector3(0, 2.4, z1 + hd - 0.12), PI, ac.lerp(Color.WHITE, 0.5), 32)
 	else:
 		for i in 3:
 			gt.box(Vector3(1.4, 0.1, 1.6), 0.03, Geo.at(-1.6 + i * 1.6, 0.05, z1 + 2.0))
-		neon("LADERAUM LEER", Vector3(0, 2.4, z1 + hd - 0.05), PI, Color(0.6, 0.6, 0.6), 36)
-	# Maschinenraum-Gitter mit Triebwerksglühen
+		neon("LADERAUM LEER", Vector3(0, 2.4, z1 + hd - 0.12), PI, Color(0.6, 0.6, 0.6), 32)
 	var ge := Geo.new()
 	ge.cyl(0.5, 0.5, 0.0, 1.8, 16, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(-1.5, 0.3, z1 + hd - 0.8)))
 	ge.cyl(0.5, 0.5, 0.0, 1.8, 16, Transform3D(Basis(Vector3.RIGHT, -PI / 2), Vector3(1.5, 0.3, z1 + hd - 0.8)))
-	ge.to_node(self, ShipBuilder.emissive(fc, 3.0), false)
+	ge.to_node(self, ShipBuilder.emissive(fc, 2.0), false)
 	for k in 6:
-		gt.box(Vector3(0.06, 1.9, 0.06), 0.01, Geo.at(-1.5 - 0.6 + k * 0.24, 1.25, z1 + hd - 0.2))
+		gt.box(Vector3(0.06, 1.9, 0.06), 0.01, Geo.at(-1.5 - 0.6 + k * 0.24, 1.25, z1 + hd - 0.25))
 	lamp(Vector3(0, 1.4, z1 + hd - 0.9), fc, 1.2, 5.0)
+	var bot := add_actor(Actor.drone(ac, rng), Vector3(0, 1.8, 0), 0.0, "fly")
+	bot.area = AABB(Vector3(-0.8, 1.6, z0 + 1.0), Vector3(1.6, 0.5, L - 2.0))
+	bot.speed = 0.8
 
-	gf.to_node(self, ShipBuilder.hull_mat(Color(0.2, 0.21, 0.24), ac, 0, Vector3(2, 1, L / 2), 1.6, 0.35, 0.5, 0.6))
-	gw.to_node(self, ShipBuilder.hull_mat(hc.lerp(Color(0.7, 0.72, 0.75), 0.4), ac, 1, Vector3(2, 1.3, L / 2), 1.3, 0.15, 0.55, 0.5))
-	gt.to_node(self, ShipBuilder.std(Color(0.18, 0.19, 0.22), 0.5, 0.45))
-	gl.to_node(self, ShipBuilder.emissive(ac, 2.2), false)
+	gr.to_node(self, room_mat(hc.lerp(Color(0.72, 0.74, 0.78), 0.45), ac, Color(0.17, 0.18, 0.2), Color(0.25, 0.26, 0.29), 1.0, 1.9, 0.9))
+	gt.to_node(self, ShipBuilder.std(Color(0.16, 0.17, 0.2), 0.5, 0.42))
+	gl.to_node(self, ShipBuilder.emissive(ac, 1.5), false)
 	ga.to_node(self, ShipBuilder.std(ac, 0.3, 0.45))
 	gs.to_node(self, ShipBuilder.emissive(Color(0.9, 0.95, 1.0), 1.1), false)
 	gsc.to_node(self, ShipBuilder.emissive(Color(0.15, 0.4, 0.7), 1.0), false)
 	for z in range(int(z0), int(z1) + 1, 4):
-		lamp(Vector3(0, H - 0.4, z), Color(1.0, 0.95, 0.88), 0.9, 5.0)
+		lamp(Vector3(0, H - 0.4, z), Color(1.0, 0.95, 0.88), 1.0, 5.0)
 	lamp(Vector3(0, 2.0, z0 - cd * 0.5), Color(0.6, 0.8, 1.0), 0.8, 5.0)
 	lamp(Vector3(0, 2.2, z1 + hd * 0.5), Color(1.0, 0.9, 0.75), 1.0, 7.0)
+	probe(Vector3(0, 1.4, (z0 - cd + z1 + hd) / 2), Vector3(hw, H + 0.8, L + cd + hd))
 	spawn = Transform3D(Basis(Vector3.UP, -PI / 2), Vector3(-W / 2 + 0.9, 0.1, lz))
+	spawns["ship"] = spawn

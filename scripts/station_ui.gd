@@ -96,6 +96,7 @@ func refresh() -> void:
 		"console": _console()
 		"paint": _paint()
 		"bar": _bar()
+		"tune": _tune_all()
 	await get_tree().process_frame
 	scroll.scroll_vertical = sv
 
@@ -147,6 +148,18 @@ func _rank_box() -> Control:
 		var miss: int = int(g.p.price) - int(Game.s.credits)
 		var tail := "noch [color=#ece5d3]%s cr[/color]" % Game.fmt(miss) if miss > 0 else "[color=#7fe08a][b]jetzt leistbar[/b][/color]"
 		v.add_child(_rich("Nächstes Upgrade: [color=#9fd4ff][b]%s[/b][/color] · %s" % [g.p.n, tail], 12, K.MUTED))
+	var best_t := -1
+	var best_s := ""
+	for sl in Game.SLOTS:
+		var id: String = Game.s.fit[sl[0]]
+		if Game.tunable(sl[0], id) and Game.tune_level(id) < Game.TUNE_MAX:
+			var tc := Game.tune_cost(sl[0], id)
+			if best_t < 0 or tc < best_t:
+				best_t = tc
+				best_s = sl[1]
+	if best_t > 0:
+		var ok := int(Game.s.credits) >= best_t
+		v.add_child(_rich("Tuning: [color=#9fd4ff][b]%s[/b][/color] eine Stufe für %s cr%s" % [best_s, Game.fmt(best_t), " · [color=#7fe08a][b]jetzt leistbar[/b][/color] beim Ausrüster oder Mechanik-Roboter im Hangar" if ok else ""], 12, K.MUTED))
 	if int(Game.s.streak) > 0:
 		v.add_child(K.wrap("Lieferserie: %d ohne Kratzer · Lohn ×%s" % [int(Game.s.streak), String.num(Game.streak_mult(), 2).replace(".", ",")], 12, K.OK))
 	return card
@@ -251,13 +264,49 @@ func _shop() -> void:
 		b.custom_minimum_size = Vector2(0, 36)
 		chips.add_child(b)
 	content.add_child(chips)
-	content.add_child(_stats_box(main.S, Game.stats(main.view_fit())))
+	content.add_child(_stats_box(main.S, Game.stats(main.view_fit(), Game.s.tune)))
+	if Game.tunable(slot, Game.s.fit[slot]):
+		content.add_child(_tune_card(slot))
 	_part_list(true, shop_lvl)
 	content.add_child(K.wrap("Tippe ein Teil an, um es am Schiff anzuprobieren.", 12))
 
+func _tune_card(sl: String) -> Control:
+	var id: String = Game.s.fit[sl]
+	var p := Game.part(sl, id)
+	var lvl := Game.tune_level(id)
+	var c := K.card("CardGoal")
+	var v := K.vbox(6)
+	c.add_child(v)
+	var r := K.hbox(8)
+	r.add_child(K.caps("Tuning"))
+	r.add_child(K.lbl(p.n, 14, K.FG))
+	r.add_child(K.spacer())
+	var pips := ""
+	for i in Game.TUNE_MAX:
+		pips += "■" if i < lvl else "□"
+	r.add_child(K.lbl(pips, 14, K.AMBER, K.F_MONO))
+	v.add_child(r)
+	var r2 := K.hbox(8)
+	r2.add_child(K.wrap("Je Stufe %s · Stufe %d/%d" % [Game.TUNE_TEXT[sl], lvl, Game.TUNE_MAX], 12))
+	if lvl < Game.TUNE_MAX:
+		var cost := Game.tune_cost(sl, id)
+		r2.add_child(K.btn("Tunen · %s cr" % Game.fmt(cost), func(): main.tune(sl), true, int(Game.s.credits) < cost))
+	else:
+		r2.add_child(K.caps("Maximal getunt", K.OK))
+	v.add_child(r2)
+	return c
+
+func _tune_all() -> void:
+	_say("Piep. Ich bin R-7, Mechanik-Einheit. Ich hole aus deinen Teilen mehr raus. Jede Stufe hält für immer, auch wenn du das Teil ausbaust.")
+	for sl in Game.SLOTS:
+		if Game.tunable(sl[0], Game.s.fit[sl[0]]):
+			content.add_child(K.caps(sl[1]))
+			content.add_child(_tune_card(sl[0]))
+	content.add_child(_stats_box(main.S, main.S))
+
 func _console() -> void:
 	_say("Bordrechner: Modul %s. Hier tauschst du Teile aus deinem Lager. Neue Teile gibt es beim Ausrüster." % _slot_name(slot))
-	content.add_child(_stats_box(main.S, Game.stats(main.view_fit())))
+	content.add_child(_stats_box(main.S, Game.stats(main.view_fit(), Game.s.tune)))
 	_part_list(false, -1)
 
 func _slot_name(s: String) -> String:

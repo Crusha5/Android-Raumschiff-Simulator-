@@ -30,11 +30,12 @@ var xp := 0
 var gun_offsets: Array = []
 var weapon: Dictionary
 
-func setup(f: Dictionary, p: Dictionary, parent: Node3D) -> void:
+func setup(f: Dictionary, p: Dictionary, parent: Node3D, tune: Dictionary = {}) -> void:
 	fit = f
 	paint = p
-	S = Game.stats(fit)
-	weapon = Game.part("weapon", fit.weapon)
+	S = Game.stats(fit, tune)
+	weapon = Game.part("weapon", fit.weapon).duplicate()
+	weapon.dmg = float(weapon.dmg) * float(S.wdmg_mult)
 	hp = float(S.hp_max)
 	shield = float(S.shield)
 	energy = float(S.energy)

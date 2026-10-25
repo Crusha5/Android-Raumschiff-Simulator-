@@ -118,7 +118,7 @@ func _ready() -> void:
 	player = ShipState.new()
 	player.is_player = true
 	player.faction = "player"
-	player.setup(Game.s.fit, Game.s.paint, world)
+	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
 	player.hp = float(player.S.hp_max) * float(Game.s.hull) / 100.0
 	S = player.S
 	combat.ships = [player]
@@ -436,7 +436,7 @@ func equip(slot: String, id: String) -> void:
 	Game.s.fit[slot] = id
 	Game.fix_cargo(Game.s.fit)
 	preview_fit = {}
-	player.setup(Game.s.fit, Game.s.paint, world)
+	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
 	player.hp = float(player.S.hp_max) * frac
 	S = player.S
 	_set_load()
@@ -453,6 +453,22 @@ func buy(slot: String, id: String) -> void:
 	Game.s.credits = int(Game.s.credits) - int(p.price)
 	Game.s.owned[slot].append(id)
 	equip(slot, id)
+
+func tune(slot: String) -> void:
+	var id: String = Game.s.fit[slot]
+	var cost := Game.tune_cost(slot, id)
+	if int(Game.s.credits) < cost or Game.tune_level(id) >= Game.TUNE_MAX:
+		return
+	Game.s.credits = int(Game.s.credits) - cost
+	Game.s.tune[id] = Game.tune_level(id) + 1
+	var frac := player.hull_frac()
+	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
+	player.hp = float(player.S.hp_max) * frac
+	S = player.S
+	_set_load()
+	Game.save_game()
+	_rebuild_hangar_ship()
+	station_ui.refresh()
 
 func set_paint(key: String, val: String) -> void:
 	var p: Dictionary = view_paint().duplicate()
@@ -482,7 +498,7 @@ func apply_paint() -> void:
 	Game.s.paint = pend_paint
 	pend_paint = {}
 	var frac := player.hull_frac()
-	player.setup(Game.s.fit, Game.s.paint, world)
+	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
 	player.hp = float(player.S.hp_max) * frac
 	_set_load()
 	Game.save_game()
@@ -522,12 +538,12 @@ func _show_view(view: String) -> void:
 	hud.release_all()
 	walk_hud.release_all()
 
-func enter_station(show_result := true) -> void:
+func enter_station(show_result := true, at := "dock") -> void:
 	state = "walk"
 	loc = "station"
 	var st := dock_station()
 	interior.build_station(st, Game.s.fit, Game.s.paint, not job.is_empty() and job.get("type", "") == "cargo")
-	walker.place(interior.spawn)
+	walker.place(interior.spawns.get(at, interior.spawn))
 	_show_view("interior")
 	walk_hud.loc_lbl.text = st.n
 	walk_hud.sub_lbl.text = Universe.system(st.sys).n.to_upper() + " · STATIONSDECK"
@@ -558,7 +574,11 @@ func _walk_interact() -> void:
 		"board":
 			_transition(func(): enter_ship())
 		"leave":
-			_transition(func(): enter_station(false))
+			_transition(func(): enter_station(false, "ship"))
+		"info":
+			show_modal("Info-Bot IB-12", _info_text())
+		"tune":
+			open_panel("tune", "R-7 · Mechanik-Einheit", dock_station().n, true)
 		"undock":
 			_transition(func(): undock())
 		"jobs":
@@ -572,6 +592,18 @@ func _walk_interact() -> void:
 		"console":
 			station_ui.slot = arg
 			open_panel("console", "Konsole · " + station_ui._slot_name(arg), "«%s»" % Game.s.name, true, arg)
+
+func _info_text() -> String:
+	var t := "[b]Willkommen auf %s.[/b]\n\n" % dock_station().n
+	t += "• [color=#9fd4ff]Aufträge[/color] gibt es bei Mara am Kiosk in der Mitte, Kopfgelder an der Bar.\n"
+	t += "• [color=#ffb547]Neue Teile und Tuning[/color] beim Ausrüster. Tuning auch bei R-7 in der Hangar-Werkstatt.\n"
+	t += "• Dein Schiff steht im [b]Hangar[/b] hinter der Tür. Geh an die Seite deines Schiffs und steig ein.\n"
+	t += "• An Bord tauschst du an den Konsolen Teile aus deinem Lager. Vom Pilotensitz dockst du ab.\n"
+	t += "• Handelsrouten-Ringe und Sprungtore beschleunigen Reisen. Neben den Routen lauern Piraten.\n"
+	var g := next_goal()
+	if not g.is_empty():
+		t += "\nTipp: Als nächstes Teil lohnt sich [b]%s[/b] für %s cr." % [g.p.n, Game.fmt(g.p.price)]
+	return t
 
 func _transition(cb: Callable) -> void:
 	walk_hud.release_all()
@@ -639,7 +671,8 @@ func _walk_update(dt: float) -> void:
 		action_arg = best.arg
 		var btn := "Sprechen"
 		match String(best.action):
-			"board", "leave": btn = "Durchgehen"
+			"board": btn = "Einsteigen"
+			"leave": btn = "Aussteigen"
 			"undock": btn = "Abdocken"
 			"console": btn = "Bedienen"
 		walk_hud.set_prompt(best.label, btn)
@@ -848,7 +881,7 @@ func _respawn() -> void:
 		_new_combat()
 	wreck_node = null
 	Game.s.system = st.sys
-	player.setup(Game.s.fit, Game.s.paint, world)
+	player.setup(Game.s.fit, Game.s.paint, world, Game.s.tune)
 	S = player.S
 	player.alive = true
 	combat.ships = [player]
